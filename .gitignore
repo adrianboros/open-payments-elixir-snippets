@@ -3,6 +3,9 @@
 /cover/
 /.elixir_ls/
 /erl_crash.dump
+/.env
+/.env.*
+!/.env.example
 /open-payments
 /*.ez
 /*.tar

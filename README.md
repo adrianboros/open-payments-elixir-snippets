@@ -34,6 +34,33 @@ The generated `open-payments` escript embeds Elixir and its runtime dependencies
 Running it requires compatible Erlang/OTP. You can invoke it by absolute path
 from another directory. See the [Mix escript documentation](https://mix.hexdocs.pm/Mix.Tasks.Escript.Build.html).
 
+## Local wallet settings
+
+Create a local `.env` in this project's root from the placeholder template.
+
+```sh
+cp .env.example .env
+```
+
+Edit `.env` with your test wallet address, registered signing-key ID, and the path
+to your existing unencrypted Ed25519 PKCS#8 PEM private key. The variable names
+are `WALLET_ADDRESS`, `KEY_ID`, and `PRIVATE_KEY_FILE`. You can instead set
+`PRIVATE_KEY_BASE64` to base64-encoded PEM and remove the file setting.
+
+Git ignores `.env` and its local variants. The tracked `.env.example` contains
+placeholders. Keep the private key file outside the repository.
+
+Load your `.env` into the current shell from the project root.
+
+```sh
+set -a
+. ./.env
+set +a
+```
+
+The current help/version commands require no wallet settings. Automatic `.env`
+loading and wallet configuration consumption have yet to be implemented.
+
 ## Commands and output
 
 | Invocation | Result |
