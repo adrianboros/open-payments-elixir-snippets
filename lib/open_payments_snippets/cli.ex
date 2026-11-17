@@ -8,7 +8,7 @@ defmodule OpenPaymentsSnippets.CLI do
 
   alias OpenPayments.{Client, Error, IncomingPayment, WalletAddress}
   alias OpenPayments.Types.{JWKS, PublicIncomingPayment}
-  alias OpenPaymentsSnippets.Commands.Keys
+  alias OpenPaymentsSnippets.Commands.{Grants, Keys}
 
   @help """
   Usage: open-payments [command] [options]
@@ -21,6 +21,7 @@ defmodule OpenPaymentsSnippets.CLI do
     incoming get-public <url> Fetch public incoming-payment details
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
+    grant validate <file|-> Validate grant-request JSON offline
 
   Options:
     -h, --help          Show help
@@ -69,7 +70,7 @@ defmodule OpenPaymentsSnippets.CLI do
         options[:version] && is_tuple(command) ->
           argument_error("The --version option cannot be combined with another command.")
 
-        Keyword.has_key?(options, :allow_http) && not match?({_, _, _}, command) ->
+        Keyword.has_key?(options, :allow_http) && not resource_command?(command) ->
           argument_error("The --allow-http option requires a resource command.")
 
         (Keyword.has_key?(options, :key_id) || Keyword.has_key?(options, :key_file)) &&
@@ -102,7 +103,14 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["incoming", "get-public", url]), do: {:ok, {:incoming, :get_public, url}}
   defp command(["keys", "validate"]), do: {:ok, {:keys, :validate}}
   defp command(["keys", "public"]), do: {:ok, {:keys, :public}}
+  defp command(["grant", "validate"]), do: {:ok, {:grant, :validate, nil}}
+  defp command(["grant", "validate", source]), do: {:ok, {:grant, :validate, source}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
+
+  defp resource_command?({group, _operation, _target}) when group in [:wallet, :incoming],
+    do: true
+
+  defp resource_command?(_command), do: false
 
   defp execute(:default, options) do
     command = if options[:version], do: :version, else: :help
@@ -129,6 +137,22 @@ defmodule OpenPaymentsSnippets.CLI do
     case outcome do
       {:ok, result} ->
         IO.puts(format_key_result(result, Keyword.get(options, :json, false)))
+        0
+
+      {:error, message} ->
+        argument_error(message)
+    end
+  end
+
+  defp execute({:grant, :validate, source}, options) do
+    case Grants.validate(source) do
+      {:ok, result} ->
+        output =
+          if Keyword.get(options, :json, false),
+            do: Jason.encode!(result),
+            else: "Valid grant request"
+
+        IO.puts(output)
         0
 
       {:error, message} ->

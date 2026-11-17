@@ -79,6 +79,8 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
 | `open-payments keys public` | Export the configured key's public JWK as formatted JSON |
 | `open-payments keys public --jwks` | Export a public JWKS containing that key |
+| `open-payments grant validate <file>` | Validate a complete grant-request JSON file offline |
+| `open-payments grant validate - --json` | Validate grant-request JSON from stdin and return a summary |
 
 Version JSON keys are `cli_version`, `sdk_version`, `specification_version`, and
 `specification_revision`. The SDK supplies the specification metadata. Wallet
@@ -89,7 +91,7 @@ Key-set JSON contains a `keys` array of public JWK objects using the SDK's
 encoders. Empty sets and duplicate key IDs retain the SDK's supported behavior.
 
 Options accept standard boolean values and negation. `--json` applies to version,
-wallet, incoming-payment, and key-command results. Unknown commands, extra arguments, conflicting help/version requests,
+wallet, incoming-payment, key-command, and grant-validation results. Unknown commands, extra arguments, conflicting help/version requests,
 and unknown or invalid options produce diagnostics. See the [OptionParser documentation](https://elixir.hexdocs.pm/OptionParser.html).
 
 Results go to stdout. Diagnostics go to stderr. Exit statuses are 0 for success,
@@ -205,6 +207,36 @@ and encodes the exported JWK or JWKS. Output contains the public fields `kid`,
 `alg`, `kty`, `crv`, and `x`. The `--jwks` option wraps the JWK in a `keys` array.
 Default output is formatted JSON, and `--json` produces compact JSON. This
 operation runs offline and writes the result to stdout.
+
+## Grant-request validation
+
+Check a complete grant-request payload through the SDK's request model. A minimal
+request for quote creation access has this shape.
+
+```json
+{
+  "client": "https://wallet.example/alice",
+  "access_token": {
+    "access": [{"type": "quote", "actions": ["create"]}]
+  }
+}
+```
+
+Save the JSON in a file and pass its path, or supply JSON on stdin with `-`.
+
+```sh
+./open-payments grant validate '/absolute/path/to/grant-request.json'
+cat '/absolute/path/to/grant-request.json' | ./open-payments grant validate - --json
+```
+
+The SDK checks client identity, nested access/interaction/subject data and request
+variants. Supply the complete payload, including its client identity. This is an
+offline validation step and requires no signing-key configuration or server.
+
+Success returns status 0 with `Valid grant request`, or `{"valid":true}` when
+`--json` is selected. File-read, JSON, schema and argument failures return status
+2 with diagnostics on stderr. Schema errors include the SDK's field paths and
+constraint messages. Payload values stay out of results and diagnostics.
 
 ## Development
 

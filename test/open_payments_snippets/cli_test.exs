@@ -43,6 +43,11 @@ defmodule OpenPaymentsSnippets.CLITest do
   -----END PRIVATE KEY-----
   """
 
+  @grant %{
+    "client" => "https://wallet.example/alice",
+    "access_token" => %{"access" => [%{"type" => "quote", "actions" => ["create"]}]}
+  }
+
   setup do
     names = ~w(WALLET_ADDRESS KEY_ID PRIVATE_KEY_FILE PRIVATE_KEY_BASE64 PRIVATE_KEY)
     previous = Enum.map(names, &{&1, System.get_env(&1)})
@@ -881,7 +886,170 @@ defmodule OpenPaymentsSnippets.CLITest do
     )
   end
 
-  defp write_key(contents) do
+  test "grant validate checks a JSON file through the SDK without changing it or echoing data" do
+    request = Map.put(@grant, "custom", "sensitive-extension")
+    json = Jason.encode!(request)
+    path = write_file(json, "grant.json")
+    previous = File.stat!(path)
+
+    assert {stdout, "", 0} = invoke(["grant", "validate", path])
+    assert stdout == "Valid grant request\n"
+    refute stdout =~ "sensitive-extension"
+    refute stdout =~ path
+    assert File.read!(path) == json
+    assert File.stat!(path).mtime == previous.mtime
+  end
+
+  test "grant validate reads stdin and emits only a JSON validation summary" do
+    request =
+      Map.put(@grant, "client", %{
+        "walletAddress" => "https://wallet.example/alice",
+        "display" => %{"name" => "Example café"}
+      })
+
+    assert {stdout, "", 0} =
+             invoke(["grant", "validate", "-", "--json"], Jason.encode!(request))
+
+    assert Jason.decode!(stdout) == %{"valid" => true}
+    refute stdout =~ "café"
+  end
+
+  test "grant validate delegates request variants and nested sensitive card data to the SDK" do
+    subject = %{"sub_ids" => [%{"id" => "https://wallet.example/alice", "format" => "uri"}]}
+
+    interact = %{
+      "start" => ["redirect"],
+      "finish" => %{
+        "method" => "redirect",
+        "uri" => "https://client.example/callback",
+        "nonce" => "sensitive-nonce"
+      }
+    }
+
+    card = %{
+      "type" => "outgoing-payment",
+      "actions" => ["create"],
+      "identifier" => "https://wallet.example/alice",
+      "cardAuthorization" => %{"tlvData" => "sensitive-card", "requestId" => "sensitive-request"}
+    }
+
+    for request <- [
+          %{"client" => @grant["client"], "subject" => subject, "interact" => interact},
+          %{@grant | "client" => %{"jwk" => @key}},
+          Map.merge(@grant, %{
+            "access_token" => %{"access" => [card]},
+            "interact" => interact,
+            "subject" => subject
+          })
+        ] do
+      for options <- [[], ["--json"]] do
+        assert {stdout, "", 0} =
+                 invoke(["grant", "validate", "-"] ++ options, Jason.encode!(request))
+
+        refute stdout =~ "sensitive-"
+        refute stdout =~ "wallet.example"
+      end
+    end
+  end
+
+  test "grant validate returns actionable SDK field paths without rejected values" do
+    for {request, field} <- [
+          {%{"client" => @grant["client"]}, "grant_request"},
+          {Map.put(@grant, "access_token", %{
+             "access" => [%{"type" => "quote", "actions" => ["sensitive-action"]}]
+           }), "access_token.access[0].actions"},
+          {Map.put(@grant, "interact", %{
+             "start" => ["redirect"],
+             "finish" => %{
+               "method" => "redirect",
+               "uri" => "https://client.example/callback",
+               "nonce" => ["sensitive-nonce"]
+             }
+           }), "interact.finish.nonce"},
+          {Map.put(@grant, "client", %{"walletAddress" => "sensitive-wallet"}),
+           "client.wallet_address"}
+        ] do
+      for options <- [[], ["--json"]] do
+        assert {"", stderr, 2} =
+                 invoke(["grant", "validate", "-"] ++ options, Jason.encode!(request))
+
+        assert stderr =~ "Invalid grant request."
+        assert stderr =~ field
+        refute stderr =~ "sensitive-"
+      end
+    end
+  end
+
+  test "grant validate rejects invalid JSON and non-object payloads safely" do
+    for input <- ["", "sensitive-json!", "{\"private\":\"sensitive-value\""] do
+      assert {"", stderr, 2} = invoke(["grant", "validate", "-", "--json"], input)
+      assert stderr =~ "Grant request must contain valid JSON."
+      refute stderr =~ "sensitive-"
+    end
+
+    assert {"", stderr, 2} = invoke(["grant", "validate", "-"], "[]")
+    assert stderr =~ "grant_request  must be a JSON object"
+
+    assert {"", stderr, 2} = invoke(["grant", "validate", "-"], <<255>>)
+    assert stderr =~ "Unable to read grant request from stdin."
+
+    for input <- ["sensitive-json!", <<255>>] do
+      path = write_file(input, "grant.json")
+      assert_argument_error(["grant", "validate", path], "Grant request must contain valid JSON.")
+    end
+  end
+
+  test "grant validate requires an input source and handles file-read failures safely" do
+    System.put_env("WALLET_ADDRESS", "https://wallet.example/alice")
+
+    for arguments <- [[], [""]] do
+      assert_argument_error(
+        ["grant", "validate"] ++ arguments,
+        "Supply a JSON file or - for stdin."
+      )
+    end
+
+    assert_argument_error(
+      ["grant", "validate", "/sensitive-path/missing.json"],
+      "Unable to read grant request file."
+    )
+  end
+
+  test "grant validate help skips input and resource/key options retain their scope" do
+    assert {stdout, "", 0} = invoke(["grant", "validate", "--help"])
+    assert stdout =~ "grant validate <file|->"
+
+    for arguments <- [
+          ["grant", "validate", "file", "extra"],
+          ["grant", "validate", "file", "--unknown"]
+        ] do
+      assert {"", _stderr, 2} = invoke(arguments)
+    end
+
+    assert_argument_error(
+      ["grant", "validate", "file", "--allow-http"],
+      "The --allow-http option requires a resource command."
+    )
+
+    assert_argument_error(
+      ["grant", "validate", "file", "--key-id", "id"],
+      "Signing-key options require keys validate or keys public."
+    )
+
+    assert_argument_error(
+      ["grant", "validate", "file", "--jwks"],
+      "The --jwks option requires keys public."
+    )
+
+    assert_argument_error(
+      ["grant", "validate", "file", "--version"],
+      "The --version option cannot be combined with another command."
+    )
+  end
+
+  defp write_key(contents), do: write_file(contents, "key.pem")
+
+  defp write_file(contents, filename) do
     directory =
       Path.join(
         System.tmp_dir!(),
@@ -890,7 +1058,7 @@ defmodule OpenPaymentsSnippets.CLITest do
 
     File.mkdir!(directory)
     on_exit(fn -> File.rm_rf!(directory) end)
-    path = Path.join(directory, "key.pem")
+    path = Path.join(directory, filename)
     File.write!(path, contents)
     path
   end
@@ -902,10 +1070,10 @@ defmodule OpenPaymentsSnippets.CLITest do
     assert stderr == "Error: #{message}\nRun open-payments help for usage.\n"
   end
 
-  defp invoke(argv) do
+  defp invoke(argv, input \\ "") do
     stderr =
       capture_io(:stderr, fn ->
-        stdout = capture_io(fn -> send(self(), {:status, CLI.run(argv)}) end)
+        stdout = capture_io([input: input], fn -> send(self(), {:status, CLI.run(argv)}) end)
         send(self(), {:stdout, stdout})
       end)
 
