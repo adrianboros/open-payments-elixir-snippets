@@ -75,6 +75,8 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments wallet keys [address] --json` | The public JWKS as compact JSON |
 | `open-payments incoming get-public <url>` | Fetch public incoming-payment details as formatted JSON |
 | `open-payments incoming get-public <url> --json` | Public incoming-payment details as compact JSON |
+| `open-payments keys validate` | Validate an existing Ed25519 signing key offline |
+| `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
 
 Version JSON keys are `cli_version`, `sdk_version`, `specification_version`, and
 `specification_revision`. The SDK supplies the specification metadata. Wallet
@@ -85,7 +87,7 @@ Key-set JSON contains a `keys` array of public JWK objects using the SDK's
 encoders. Empty sets and duplicate key IDs retain the SDK's supported behavior.
 
 Options accept standard boolean values and negation. `--json` applies to version,
-wallet, and incoming-payment results. Unknown commands, extra arguments, conflicting help/version requests,
+wallet, incoming-payment, and key-validation results. Unknown commands, extra arguments, conflicting help/version requests,
 and unknown or invalid options produce diagnostics. See the [OptionParser documentation](https://elixir.hexdocs.pm/OptionParser.html).
 
 Results go to stdout. Diagnostics go to stderr. Exit statuses are 0 for success,
@@ -155,6 +157,35 @@ Default output is formatted JSON, and `--json` produces compact JSON. Amounts,
 timestamps, returned URLs, optional fields, and extensions use the SDK's JSON
 representation. Fields named `sharedSecret`, including those nested in
 extensions, display `[REDACTED]` in both modes.
+
+## Signing-key validation
+
+Validate an existing unencrypted Ed25519 PKCS#8 PEM key using its file path and
+registered key ID.
+
+```sh
+./open-payments keys validate --key-file '/absolute/path/to/your-private-key.pem' --key-id 'registered-key-id'
+```
+
+After loading `.env` into your shell, use `KEY_ID` with either `PRIVATE_KEY_FILE`
+or `PRIVATE_KEY_BASE64`.
+
+```sh
+./open-payments keys validate
+./open-payments keys validate --json
+```
+
+`PRIVATE_KEY_BASE64` contains base64-encoded PEM text. Empty environment values
+count as unset. If both environment key sources are populated, the command
+returns a configuration error. `--key-file` selects a file for the current
+invocation and takes precedence over the environment key sources. `--key-id`
+takes precedence over `KEY_ID`. These flags apply to `keys validate`.
+
+The SDK performs key import and validation. Success returns status 0 and shows
+the key ID. JSON output contains `valid: true` and `key_id`. Missing or invalid
+configuration returns status 2 with a diagnostic on stderr. Output omits private
+key material and file paths. This offline check requires no wallet address or
+server.
 
 ## Development
 

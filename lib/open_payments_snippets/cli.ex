@@ -8,6 +8,7 @@ defmodule OpenPaymentsSnippets.CLI do
 
   alias OpenPayments.{Client, Error, IncomingPayment, WalletAddress}
   alias OpenPayments.Types.{JWKS, PublicIncomingPayment}
+  alias OpenPaymentsSnippets.Commands.Keys
 
   @help """
   Usage: open-payments [command] [options]
@@ -18,12 +19,15 @@ defmodule OpenPaymentsSnippets.CLI do
     wallet get [address] Fetch public wallet information using a URL or payment pointer
     wallet keys [address] Fetch the wallet's public JSON Web Key Set
     incoming get-public <url> Fetch public incoming-payment details
+    keys validate       Validate an existing Ed25519 signing key offline
 
   Options:
     -h, --help          Show help
     -v, --version       Show version information
     --json              Format results as JSON
     --allow-http        Allow HTTP development URLs for resource commands
+    --key-id <id>       Override KEY_ID for keys validate
+    --key-file <path>   Select a PEM file for keys validate
 
   Wallet address defaults to the WALLET_ADDRESS environment variable.
 
@@ -42,7 +46,14 @@ defmodule OpenPaymentsSnippets.CLI do
   def run(argv) do
     {options, arguments, invalid} =
       OptionParser.parse(argv,
-        strict: [help: :boolean, version: :boolean, json: :boolean, allow_http: :boolean],
+        strict: [
+          help: :boolean,
+          version: :boolean,
+          json: :boolean,
+          allow_http: :boolean,
+          key_id: :string,
+          key_file: :string
+        ],
         aliases: [h: :help, v: :version]
       )
 
@@ -53,10 +64,14 @@ defmodule OpenPaymentsSnippets.CLI do
           argument_error("Choose either help or version.")
 
         options[:version] && is_tuple(command) ->
-          argument_error("The --version option cannot be combined with resource commands.")
+          argument_error("The --version option cannot be combined with another command.")
 
-        Keyword.has_key?(options, :allow_http) && not is_tuple(command) ->
+        Keyword.has_key?(options, :allow_http) && not match?({_, _, _}, command) ->
           argument_error("The --allow-http option requires a resource command.")
+
+        (Keyword.has_key?(options, :key_id) || Keyword.has_key?(options, :key_file)) &&
+            command != {:keys, :validate} ->
+          argument_error("Signing-key options require keys validate.")
 
         options[:help] ->
           print_help(Keyword.get(options, :json, false))
@@ -79,6 +94,7 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["wallet", "keys", address]), do: {:ok, {:wallet, :keys, address}}
   defp command(["incoming", "get-public"]), do: {:ok, {:incoming, :get_public, nil}}
   defp command(["incoming", "get-public", url]), do: {:ok, {:incoming, :get_public, url}}
+  defp command(["keys", "validate"]), do: {:ok, {:keys, :validate}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
 
   defp execute(:default, options) do
@@ -95,6 +111,22 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp execute({:incoming, :get_public, url}, options),
     do: get_resource(:get_public, url, options)
+
+  defp execute({:keys, :validate}, options) do
+    case Keys.validate(options) do
+      {:ok, result} ->
+        IO.puts(format_key_validation(result, Keyword.get(options, :json, false)))
+        0
+
+      {:error, message} ->
+        argument_error(message)
+    end
+  end
+
+  defp format_key_validation(result, true), do: Jason.encode!(result)
+
+  defp format_key_validation(result, false),
+    do: "Valid Ed25519 signing key\nKey ID  #{result.key_id}"
 
   defp print_help(true), do: argument_error("The --json option requires a result command.")
 

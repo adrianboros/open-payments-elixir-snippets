@@ -35,14 +35,24 @@ defmodule OpenPaymentsSnippets.CLITest do
     ]
   }
 
+  # PKCS#8 encoding of the public RFC 8032 section 7.1 test-1 seed, matching
+  # the sibling SDK's Node-exported fixture. This is public test material.
+  @pem """
+  -----BEGIN PRIVATE KEY-----
+  MC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g
+  -----END PRIVATE KEY-----
+  """
+
   setup do
-    previous = System.get_env("WALLET_ADDRESS")
-    System.delete_env("WALLET_ADDRESS")
+    names = ~w(WALLET_ADDRESS KEY_ID PRIVATE_KEY_FILE PRIVATE_KEY_BASE64 PRIVATE_KEY)
+    previous = Enum.map(names, &{&1, System.get_env(&1)})
+    Enum.each(names, &System.delete_env/1)
 
     on_exit(fn ->
-      if previous,
-        do: System.put_env("WALLET_ADDRESS", previous),
-        else: System.delete_env("WALLET_ADDRESS")
+      Enum.each(previous, fn
+        {name, nil} -> System.delete_env(name)
+        {name, value} -> System.put_env(name, value)
+      end)
     end)
   end
 
@@ -257,7 +267,7 @@ defmodule OpenPaymentsSnippets.CLITest do
 
     assert_argument_error(
       ["wallet", "get", base, "--version"],
-      "The --version option cannot be combined with resource commands."
+      "The --version option cannot be combined with another command."
     )
 
     refute_received {:http_request, _}
@@ -360,7 +370,7 @@ defmodule OpenPaymentsSnippets.CLITest do
 
     assert_argument_error(
       ["wallet", "keys", base, "--version"],
-      "The --version option cannot be combined with resource commands."
+      "The --version option cannot be combined with another command."
     )
 
     refute_received {:http_request, _}
@@ -506,7 +516,7 @@ defmodule OpenPaymentsSnippets.CLITest do
 
     assert_argument_error(
       ["incoming", "get-public", base, "--version"],
-      "The --version option cannot be combined with resource commands."
+      "The --version option cannot be combined with another command."
     )
 
     refute_received {:http_request, _}
@@ -582,6 +592,184 @@ defmodule OpenPaymentsSnippets.CLITest do
 
     assert Jason.decode!(stdout) == response
     assert_received {:http_request, _}
+  end
+
+  test "keys validate imports an existing PEM file with explicit key ID" do
+    path = write_key(@pem)
+    previous = File.stat!(path)
+
+    assert {stdout, "", 0} =
+             invoke(["keys", "validate", "--key-file", path, "--key-id", "registered-key"])
+
+    assert stdout == "Valid Ed25519 signing key\nKey ID  registered-key\n"
+    assert File.read!(path) == @pem
+    assert File.stat!(path).mtime == previous.mtime
+    refute stdout =~ "PRIVATE KEY"
+    refute stdout =~ "MC4CAQ"
+  end
+
+  test "keys validate uses environment file settings and emits a safe JSON summary" do
+    System.put_env("KEY_ID", "environment-key")
+    System.put_env("PRIVATE_KEY_FILE", write_key(@pem))
+    System.put_env("WALLET_ADDRESS", "invalid-wallet-setting")
+
+    assert {stdout, "", 0} = invoke(["keys", "validate", "--json"])
+    assert Jason.decode!(stdout) == %{"valid" => true, "key_id" => "environment-key"}
+    refute stdout =~ "MC4CAQ"
+  end
+
+  test "keys validate imports explicitly configured base64 PEM" do
+    System.put_env("KEY_ID", "base64-key")
+    encoded = Base.encode64(@pem)
+    System.put_env("PRIVATE_KEY_BASE64", encoded)
+
+    assert {stdout, "", 0} = invoke(["--json", "keys", "validate"])
+    assert Jason.decode!(stdout) == %{"valid" => true, "key_id" => "base64-key"}
+    refute stdout =~ encoded
+  end
+
+  test "key-file and key-id flags take precedence over environment settings" do
+    path = write_key(@pem)
+    System.put_env("KEY_ID", "environment-key")
+    System.put_env("PRIVATE_KEY_FILE", "/invalid-key-path")
+    System.put_env("PRIVATE_KEY_BASE64", "invalid-base64")
+
+    assert {stdout, "", 0} =
+             invoke([
+               "keys",
+               "validate",
+               "--key-file",
+               path,
+               "--key-id",
+               "explicit-key",
+               "--json"
+             ])
+
+    assert Jason.decode!(stdout) == %{"valid" => true, "key_id" => "explicit-key"}
+  end
+
+  test "keys validate reports missing and conflicting configuration" do
+    assert_argument_error(["keys", "validate"], "Supply --key-id or set KEY_ID.")
+    System.put_env("KEY_ID", "registered-key")
+
+    assert_argument_error(
+      ["keys", "validate"],
+      "Supply --key-file or set PRIVATE_KEY_FILE or PRIVATE_KEY_BASE64."
+    )
+
+    System.put_env("PRIVATE_KEY_FILE", "")
+    System.put_env("PRIVATE_KEY_BASE64", Base.encode64(@pem))
+    assert {_stdout, "", 0} = invoke(["keys", "validate"])
+
+    System.put_env("PRIVATE_KEY_FILE", write_key(@pem))
+
+    assert_argument_error(
+      ["keys", "validate"],
+      "Set only one of PRIVATE_KEY_FILE and PRIVATE_KEY_BASE64."
+    )
+  end
+
+  test "keys validate delegates malformed and public-only PEM rejection to the SDK" do
+    public_pem = """
+    -----BEGIN PUBLIC KEY-----
+    MCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=
+    -----END PUBLIC KEY-----
+    """
+
+    System.put_env("KEY_ID", "registered-key")
+
+    for contents <- ["private-value", public_pem] do
+      path = write_key(contents)
+
+      for options <- [[], ["--json"]] do
+        assert_argument_error(
+          ["keys", "validate", "--key-file", path] ++ options,
+          "Invalid signing key. Check the key source, PEM format, and key ID."
+        )
+      end
+    end
+  end
+
+  test "keys validate rejects missing files, invalid base64 and invalid key IDs safely" do
+    System.put_env("KEY_ID", "registered-key")
+
+    assert_argument_error(
+      ["keys", "validate", "--key-file", "/private-value/missing.pem", "--json"],
+      "Invalid signing key. Check the key source, PEM format, and key ID."
+    )
+
+    for encoded <- ["private-value!", Base.encode64("private-value")] do
+      System.put_env("PRIVATE_KEY_BASE64", encoded)
+
+      assert_argument_error(
+        ["keys", "validate", "--json"],
+        "Invalid signing key. Check the key source, PEM format, and key ID."
+      )
+    end
+
+    System.put_env("PRIVATE_KEY_BASE64", Base.encode64(@pem))
+
+    for key_id <- ["", " "] do
+      assert_argument_error(
+        ["keys", "validate", "--key-id", key_id],
+        "Invalid signing key. Check the key source, PEM format, and key ID."
+      )
+    end
+  end
+
+  test "keys validate requires explicit formats and ignores the ambiguous PRIVATE_KEY name" do
+    System.put_env("KEY_ID", "registered-key")
+    System.put_env("PRIVATE_KEY", Base.encode64(@pem))
+
+    assert_argument_error(
+      ["keys", "validate"],
+      "Supply --key-file or set PRIVATE_KEY_FILE or PRIVATE_KEY_BASE64."
+    )
+  end
+
+  test "keys validate help skips configuration and key flags are scoped to that command" do
+    assert {stdout, "", 0} = invoke(["keys", "validate", "--help"])
+    assert stdout =~ "keys validate"
+
+    for arguments <- [
+          ["keys", "validate", "extra"],
+          ["keys", "validate", "--key-file"],
+          ["keys", "validate", "--key-id"],
+          ["keys", "validate", "--unknown"]
+        ] do
+      assert {"", _stderr, 2} = invoke(arguments)
+    end
+
+    assert_argument_error(
+      ["keys", "validate", "--allow-http"],
+      "The --allow-http option requires a resource command."
+    )
+
+    for arguments <- [
+          ["version", "--key-file", "private-path"],
+          ["wallet", "get", "--key-id", "id"]
+        ] do
+      assert_argument_error(arguments, "Signing-key options require keys validate.")
+    end
+
+    assert_argument_error(
+      ["keys", "validate", "--version"],
+      "The --version option cannot be combined with another command."
+    )
+  end
+
+  defp write_key(contents) do
+    directory =
+      Path.join(
+        System.tmp_dir!(),
+        "open-payments-snippets-#{System.pid()}-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+    path = Path.join(directory, "key.pem")
+    File.write!(path, contents)
+    path
   end
 
   defp assert_argument_error(argv, message) do
