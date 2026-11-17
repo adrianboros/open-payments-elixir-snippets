@@ -58,9 +58,9 @@ set -a
 set +a
 ```
 
-`wallet get` uses the exported `WALLET_ADDRESS` when no address argument is
-supplied. This public operation requires no signing key. Automatic `.env`
-loading remains pending, so load the file into your shell before invoking it.
+`wallet get` and `wallet keys` use the exported `WALLET_ADDRESS` when no address
+argument is supplied. These public operations require no signing key. Automatic
+`.env` loading remains pending, so load the file into your shell before invoking it.
 
 ## Commands and output
 
@@ -71,11 +71,16 @@ loading remains pending, so load the file into your shell before invoking it.
 | `open-payments version --json` | The same version data as a JSON object |
 | `open-payments wallet get [address]` | Fetch and validate public wallet information |
 | `open-payments wallet get [address] --json` | Public wallet information with the SDK's JSON field mappings |
+| `open-payments wallet keys [address]` | Fetch and validate the wallet's public JWKS, displayed as formatted JSON |
+| `open-payments wallet keys [address] --json` | The public JWKS as compact JSON |
 
 Version JSON keys are `cli_version`, `sdk_version`, `specification_version`, and
 `specification_revision`. The SDK supplies the specification metadata. Wallet
 JSON uses Open Payments field names such as `assetCode` and `authServer`, and
 preserves the SDK's returned extension fields.
+
+Key-set JSON contains a `keys` array of public JWK objects using the SDK's
+encoders. Empty sets and duplicate key IDs retain the SDK's supported behavior.
 
 Options accept standard boolean values and negation. `--json` applies to version
 and wallet results. Unknown commands, extra arguments, conflicting help/version requests,
@@ -98,6 +103,19 @@ An explicit address takes precedence over `WALLET_ADDRESS`.
 The SDK resolves payment pointers and validates responses. A root pointer such
 as `$wallet.example` uses `https://wallet.example/.well-known/pay`. Returned
 authorization and resource-server URLs retain their paths.
+
+Fetch the wallet's registered public keys with `wallet keys`.
+
+```sh
+./open-payments wallet keys '$wallet.example/alice'
+./open-payments wallet keys --json
+```
+
+The SDK resolves the wallet identifier and appends `jwks.json` to its path. A
+root pointer such as `$wallet.example` uses
+`https://wallet.example/.well-known/pay/jwks.json`. The SDK validates the returned
+JWKS and each public JWK. Default output is formatted JSON; `--json` produces
+compact JSON for scripts.
 
 For a local development server, explicitly enable HTTP.
 

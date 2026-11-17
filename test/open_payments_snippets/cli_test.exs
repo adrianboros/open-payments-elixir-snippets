@@ -15,6 +15,15 @@ defmodule OpenPaymentsSnippets.CLITest do
     "resourceServer" => "https://payments.example/tenants/alice"
   }
 
+  # Public key from RFC 8032 test vector 1.
+  @key %{
+    "kid" => "key-1",
+    "alg" => "EdDSA",
+    "kty" => "OKP",
+    "crv" => "Ed25519",
+    "x" => "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+  }
+
   setup do
     previous = System.get_env("WALLET_ADDRESS")
     System.delete_env("WALLET_ADDRESS")
@@ -126,7 +135,10 @@ defmodule OpenPaymentsSnippets.CLITest do
 
   test "JSON requires a result command" do
     for argv <- [["--json"], ["help", "--json"], ["--help", "--json"]] do
-      assert_argument_error(argv, "The --json option requires version or wallet get.")
+      assert_argument_error(
+        argv,
+        "The --json option requires version, wallet get, or wallet keys."
+      )
     end
   end
 
@@ -229,12 +241,12 @@ defmodule OpenPaymentsSnippets.CLITest do
     end
 
     for argv <- [["version", "--allow-http"], ["help", "--allow-http"]] do
-      assert_argument_error(argv, "The --allow-http option requires wallet get.")
+      assert_argument_error(argv, "The --allow-http option requires wallet get or wallet keys.")
     end
 
     assert_argument_error(
       ["wallet", "get", base, "--version"],
-      "The --version option cannot be combined with wallet get."
+      "The --version option cannot be combined with wallet commands."
     )
 
     refute_received {:http_request, _}
@@ -267,6 +279,137 @@ defmodule OpenPaymentsSnippets.CLITest do
     {"", stderr, 1} = invoke(["wallet", "get", base <> "/alice", "--allow-http"])
     assert stderr == "Error: Wallet discovery failed due to a transport error.\n"
     assert_received {:http_request, _}
+    refute_receive {:http_request, _}, 20
+  end
+
+  test "wallet keys fetches unsigned public JWKS and supports readable and compact JSON" do
+    key = Map.merge(@key, %{"use" => "sig", "custom" => %{"enabled" => true}})
+    response = %{"keys" => [key]}
+    base = HTTPServer.start({200, [], Jason.encode!(response)})
+
+    for options <- [[], ["--json"]] do
+      {stdout, stderr, status} =
+        invoke(["wallet", "keys", base <> "/tenant/alice", "--allow-http"] ++ options)
+
+      assert status == 0
+      assert stderr == ""
+      assert Jason.decode!(stdout) == response
+      assert String.contains?(String.trim_trailing(stdout), "\n") == (options == [])
+
+      assert_received {:http_request,
+                       %{method: :GET, target: "/tenant/alice/jwks.json", headers: headers}}
+
+      assert headers["accept"] == "application/json"
+      refute Map.has_key?(headers, "signature")
+      refute Map.has_key?(headers, "authorization")
+    end
+  end
+
+  test "wallet keys delegates encoded and trailing path handling to the SDK" do
+    base = HTTPServer.start({200, [], ~s({"keys":[]})})
+
+    for path <- ["/tenant/a%2Fb", "/tenant/a%2Fb/"] do
+      assert {stdout, "", 0} =
+               invoke(["wallet", "keys", base <> path, "--allow-http", "--json"])
+
+      assert Jason.decode!(stdout) == %{"keys" => []}
+      assert_received {:http_request, %{target: "/tenant/a%2Fb/jwks.json"}}
+    end
+  end
+
+  test "wallet keys uses WALLET_ADDRESS with explicit argument precedence" do
+    base = HTTPServer.start({200, [], Jason.encode!(%{"keys" => [@key, @key]})})
+    System.put_env("WALLET_ADDRESS", base <> "/default-wallet")
+
+    assert {stdout, "", 0} = invoke(["wallet", "keys", "--allow-http", "--json"])
+    assert Jason.decode!(stdout) == %{"keys" => [@key, @key]}
+    assert_received {:http_request, %{target: "/default-wallet/jwks.json"}}
+
+    assert {_stdout, "", 0} = invoke(["wallet", "keys", base <> "/explicit", "--allow-http"])
+    assert_received {:http_request, %{target: "/explicit/jwks.json"}}
+  end
+
+  test "wallet keys rejects missing settings, invalid identifiers and arguments before requests" do
+    base = HTTPServer.start({200, [], ~s({"keys":[]})})
+
+    for argv <- [["wallet", "keys"], ["wallet", "keys", ""]] do
+      assert_argument_error(argv, "Supply a wallet address or set WALLET_ADDRESS.")
+    end
+
+    for address <- [base, "not-a-wallet", "$wallet.example/alice?private-value"] do
+      assert_argument_error(
+        ["wallet", "keys", address],
+        "Invalid wallet address. Use an HTTPS URL or payment pointer; local HTTP requires --allow-http."
+      )
+    end
+
+    for arguments <- [["extra"], ["--unknown"], ["--allow-http=invalid"]] do
+      assert {"", _stderr, 2} = invoke(["wallet", "keys", base] ++ arguments)
+    end
+
+    assert_argument_error(
+      ["wallet", "keys", base, "--version"],
+      "The --version option cannot be combined with wallet commands."
+    )
+
+    refute_received {:http_request, _}
+  end
+
+  test "wallet keys help avoids requests" do
+    base = HTTPServer.start({200, [], ~s({"keys":[]})})
+    System.put_env("WALLET_ADDRESS", base)
+
+    for arguments <- [[], [base, "--allow-http"]] do
+      assert {stdout, "", 0} = invoke(["wallet", "keys", "--help"] ++ arguments)
+      assert stdout =~ "wallet keys [address]"
+    end
+
+    refute_received {:http_request, _}
+  end
+
+  test "wallet keys rejects malformed, schema-invalid and private responses without exposing data" do
+    private_key = Map.put(@key, "d", "private-key-material")
+
+    for body <- [
+          "not-json",
+          "{}",
+          Jason.encode!(%{"keys" => [Map.delete(@key, "alg")]}),
+          Jason.encode!(%{"keys" => [private_key]})
+        ] do
+      base = HTTPServer.start({200, [], body})
+
+      for options <- [[], ["--json"]] do
+        assert {"", stderr, 1} =
+                 invoke(["wallet", "keys", base <> "/alice", "--allow-http"] ++ options)
+
+        assert stderr == "Error: Wallet discovery returned an invalid response.\n"
+        assert_received {:http_request, %{target: "/alice/jwks.json"}}
+      end
+
+      stop_supervised!(Task)
+    end
+  end
+
+  test "wallet keys reports HTTP failures and redirects with safe diagnostics" do
+    for status <- [302, 404, 500] do
+      body = Jason.encode!(%{"error" => %{"description" => "private-value"}})
+      base = HTTPServer.start({status, [{"location", "/other-keys"}], body})
+
+      assert {"", stderr, 1} =
+               invoke(["wallet", "keys", base <> "/alice", "--allow-http", "--json"])
+
+      assert stderr == "Error: Wallet discovery failed (HTTP #{status}).\n"
+      assert_received {:http_request, %{target: "/alice/jwks.json"}}
+      refute_receive {:http_request, _}, 20
+      stop_supervised!(Task)
+    end
+  end
+
+  test "wallet keys reports transport failures without retrying" do
+    base = HTTPServer.start(:close)
+    assert {"", stderr, 1} = invoke(["wallet", "keys", base <> "/alice", "--allow-http"])
+    assert stderr == "Error: Wallet discovery failed due to a transport error.\n"
+    assert_received {:http_request, %{target: "/alice/jwks.json"}}
     refute_receive {:http_request, _}, 20
   end
 

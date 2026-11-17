@@ -7,6 +7,7 @@ defmodule OpenPaymentsSnippets.CLI do
   """
 
   alias OpenPayments.{Client, Error, WalletAddress}
+  alias OpenPayments.Types.JWKS
 
   @help """
   Usage: open-payments [command] [options]
@@ -15,12 +16,13 @@ defmodule OpenPaymentsSnippets.CLI do
     help                Show this help
     version             Show CLI, SDK, and Open Payments specification versions
     wallet get [address] Fetch public wallet information using a URL or payment pointer
+    wallet keys [address] Fetch the wallet's public JSON Web Key Set
 
   Options:
     -h, --help          Show help
     -v, --version       Show version information
     --json              Format results as JSON
-    --allow-http        Allow HTTP development URLs for wallet get
+    --allow-http        Allow HTTP development URLs for wallet commands
 
   Wallet address defaults to the WALLET_ADDRESS environment variable.
 
@@ -49,11 +51,11 @@ defmodule OpenPaymentsSnippets.CLI do
         (options[:help] && options[:version]) || (command == :help && options[:version]) ->
           argument_error("Choose either help or version.")
 
-        options[:version] && match?({:wallet_get, _}, command) ->
-          argument_error("The --version option cannot be combined with wallet get.")
+        options[:version] && match?({:wallet, _, _}, command) ->
+          argument_error("The --version option cannot be combined with wallet commands.")
 
-        Keyword.has_key?(options, :allow_http) && not match?({:wallet_get, _}, command) ->
-          argument_error("The --allow-http option requires wallet get.")
+        Keyword.has_key?(options, :allow_http) && not match?({:wallet, _, _}, command) ->
+          argument_error("The --allow-http option requires wallet get or wallet keys.")
 
         options[:help] ->
           print_help(Keyword.get(options, :json, false))
@@ -70,8 +72,10 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command([]), do: {:ok, :default}
   defp command(["help"]), do: {:ok, :help}
   defp command(["version"]), do: {:ok, :version}
-  defp command(["wallet", "get"]), do: {:ok, {:wallet_get, nil}}
-  defp command(["wallet", "get", address]), do: {:ok, {:wallet_get, address}}
+  defp command(["wallet", "get"]), do: {:ok, {:wallet, :get, nil}}
+  defp command(["wallet", "get", address]), do: {:ok, {:wallet, :get, address}}
+  defp command(["wallet", "keys"]), do: {:ok, {:wallet, :keys, nil}}
+  defp command(["wallet", "keys", address]), do: {:ok, {:wallet, :keys, address}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
 
   defp execute(:default, options) do
@@ -82,11 +86,12 @@ defmodule OpenPaymentsSnippets.CLI do
   defp execute(:help, options), do: print_help(Keyword.get(options, :json, false))
   defp execute(:version, options), do: print_version(Keyword.get(options, :json, false))
 
-  defp execute({:wallet_get, address}, options) do
-    get_wallet(address || System.get_env("WALLET_ADDRESS"), options)
+  defp execute({:wallet, operation, address}, options) do
+    get_wallet(operation, address || System.get_env("WALLET_ADDRESS"), options)
   end
 
-  defp print_help(true), do: argument_error("The --json option requires version or wallet get.")
+  defp print_help(true),
+    do: argument_error("The --json option requires version, wallet get, or wallet keys.")
 
   defp print_help(false) do
     IO.write(@help)
@@ -121,14 +126,14 @@ defmodule OpenPaymentsSnippets.CLI do
     application |> Application.spec(:vsn) |> to_string()
   end
 
-  defp get_wallet(address, _options) when address in [nil, ""] do
+  defp get_wallet(_operation, address, _options) when address in [nil, ""] do
     argument_error("Supply a wallet address or set WALLET_ADDRESS.")
   end
 
-  defp get_wallet(address, options) do
+  defp get_wallet(operation, address, options) do
     with {:ok, client} <- Client.new_public(allow_http: Keyword.get(options, :allow_http, false)),
-         {:ok, wallet} <- WalletAddress.get(client, address) do
-      IO.puts(format_wallet(wallet, Keyword.get(options, :json, false)))
+         {:ok, resource} <- fetch_wallet(client, operation, address) do
+      IO.puts(format_wallet(resource, Keyword.get(options, :json, false)))
       0
     else
       {:error, %Error{kind: kind} = error} when kind in [:validation, :configuration] ->
@@ -140,7 +145,11 @@ defmodule OpenPaymentsSnippets.CLI do
     end
   end
 
+  defp fetch_wallet(client, :get, address), do: WalletAddress.get(client, address)
+  defp fetch_wallet(client, :keys, address), do: WalletAddress.get_keys(client, address)
+
   defp format_wallet(wallet, true), do: Jason.encode!(wallet)
+  defp format_wallet(%JWKS{} = keys, false), do: Jason.encode!(keys, pretty: true)
 
   defp format_wallet(wallet, false) do
     [
