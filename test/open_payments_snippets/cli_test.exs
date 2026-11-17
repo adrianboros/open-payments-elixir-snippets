@@ -24,6 +24,17 @@ defmodule OpenPaymentsSnippets.CLITest do
     "x" => "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
   }
 
+  @incoming_payment %{
+    "id" => "https://payments.example/tenant/incoming-payments/payment-1",
+    "completed" => false,
+    "receivedAmount" => %{"value" => "0", "assetCode" => "USD", "assetScale" => 2},
+    "createdAt" => "2026-11-17T09:20:50.52Z",
+    "authServer" => "https://auth.example/tenant",
+    "methods" => [
+      %{"type" => "ilp", "ilpAddress" => "g.example.alice", "sharedSecret" => "test-secret"}
+    ]
+  }
+
   setup do
     previous = System.get_env("WALLET_ADDRESS")
     System.delete_env("WALLET_ADDRESS")
@@ -137,7 +148,7 @@ defmodule OpenPaymentsSnippets.CLITest do
     for argv <- [["--json"], ["help", "--json"], ["--help", "--json"]] do
       assert_argument_error(
         argv,
-        "The --json option requires version, wallet get, or wallet keys."
+        "The --json option requires a result command."
       )
     end
   end
@@ -241,12 +252,12 @@ defmodule OpenPaymentsSnippets.CLITest do
     end
 
     for argv <- [["version", "--allow-http"], ["help", "--allow-http"]] do
-      assert_argument_error(argv, "The --allow-http option requires wallet get or wallet keys.")
+      assert_argument_error(argv, "The --allow-http option requires a resource command.")
     end
 
     assert_argument_error(
       ["wallet", "get", base, "--version"],
-      "The --version option cannot be combined with wallet commands."
+      "The --version option cannot be combined with resource commands."
     )
 
     refute_received {:http_request, _}
@@ -349,7 +360,7 @@ defmodule OpenPaymentsSnippets.CLITest do
 
     assert_argument_error(
       ["wallet", "keys", base, "--version"],
-      "The --version option cannot be combined with wallet commands."
+      "The --version option cannot be combined with resource commands."
     )
 
     refute_received {:http_request, _}
@@ -411,6 +422,166 @@ defmodule OpenPaymentsSnippets.CLITest do
     assert stderr == "Error: Wallet discovery failed due to a transport error.\n"
     assert_received {:http_request, %{target: "/alice/jwks.json"}}
     refute_receive {:http_request, _}, 20
+  end
+
+  test "public incoming reads use unsigned GET and preserve opaque paths and queries" do
+    base = HTTPServer.start({200, [], Jason.encode!(@incoming_payment)})
+    target = "/tenant/opaque%2Fresource/../payment?part=a%2Bb&part=second"
+
+    assert {stdout, "", 0} =
+             invoke(["incoming", "get-public", base <> target, "--allow-http", "--json"])
+
+    output = Jason.decode!(stdout)
+    assert Map.drop(output, ["methods"]) == Map.drop(@incoming_payment, ["methods"])
+
+    assert output["methods"] == [
+             %{"type" => "ilp", "ilpAddress" => "g.example.alice", "sharedSecret" => "[REDACTED]"}
+           ]
+
+    refute stdout =~ "test-secret"
+    assert_received {:http_request, %{method: :GET, target: ^target, headers: headers}}
+    assert headers["accept"] == "application/json"
+    refute Map.has_key?(headers, "authorization")
+    refute Map.has_key?(headers, "signature")
+    refute Map.has_key?(headers, "signature-input")
+  end
+
+  test "public incoming output preserves optional amounts, timestamps and extensions with redaction" do
+    response =
+      Map.merge(@incoming_payment, %{
+        "completed" => true,
+        "incomingAmount" => %{
+          "value" => "18446744073709551615",
+          "assetCode" => "USD",
+          "assetScale" => 2
+        },
+        "expiresAt" => "2026-12-01T09:20:50.520+02:00",
+        "custom" => %{"nested" => [%{"sharedSecret" => "nested-secret", "enabled" => true}]}
+      })
+
+    base = HTTPServer.start({200, [], Jason.encode!(response)})
+
+    for options <- [[], ["--json"]] do
+      assert {stdout, "", 0} =
+               invoke(["incoming", "get-public", base <> "/payment", "--allow-http"] ++ options)
+
+      output = Jason.decode!(stdout)
+      assert output["incomingAmount"] == response["incomingAmount"]
+      assert output["createdAt"] == response["createdAt"]
+      assert output["expiresAt"] == response["expiresAt"]
+      assert output["completed"]
+
+      assert output["custom"] == %{
+               "nested" => [%{"sharedSecret" => "[REDACTED]", "enabled" => true}]
+             }
+
+      refute stdout =~ "test-secret"
+      refute stdout =~ "nested-secret"
+      assert String.contains?(String.trim_trailing(stdout), "\n") == (options == [])
+      assert_received {:http_request, %{target: "/payment"}}
+    end
+  end
+
+  test "public incoming reads require a resource URL and never fall back to WALLET_ADDRESS" do
+    base = HTTPServer.start({200, [], Jason.encode!(@incoming_payment)})
+    System.put_env("WALLET_ADDRESS", base <> "/wallet")
+
+    for arguments <- [[], [""]] do
+      assert_argument_error(
+        ["incoming", "get-public"] ++ arguments,
+        "Supply a full incoming-payment URL."
+      )
+    end
+
+    for url <- [base <> "/payment", "$wallet.example/alice", "/payment", "not-a-url"] do
+      assert_argument_error(
+        ["incoming", "get-public", url],
+        "Invalid incoming-payment URL. Use a full HTTPS resource URL; local HTTP requires --allow-http."
+      )
+    end
+
+    for arguments <- [["extra"], ["--unknown"], ["--allow-http=invalid"]] do
+      assert {"", _stderr, 2} = invoke(["incoming", "get-public", base] ++ arguments)
+    end
+
+    assert_argument_error(
+      ["incoming", "get-public", base, "--version"],
+      "The --version option cannot be combined with resource commands."
+    )
+
+    refute_received {:http_request, _}
+  end
+
+  test "public incoming help makes no request" do
+    base = HTTPServer.start({200, [], Jason.encode!(@incoming_payment)})
+
+    for arguments <- [[], [base, "--allow-http"]] do
+      assert {stdout, "", 0} = invoke(["incoming", "get-public", "--help"] ++ arguments)
+      assert stdout =~ "incoming get-public <url>"
+    end
+
+    refute_received {:http_request, _}
+  end
+
+  test "public incoming malformed and schema-invalid responses have safe errors" do
+    for body <- [
+          "not-json",
+          "{}",
+          Jason.encode!(Map.put(@incoming_payment, "receivedAmount", nil)),
+          Jason.encode!(Map.put(@incoming_payment, "createdAt", "invalid-date")),
+          Jason.encode!(
+            Map.put(@incoming_payment, "methods", [%{"sharedSecret" => "sensitive-value"}])
+          )
+        ] do
+      base = HTTPServer.start({200, [], body})
+
+      for options <- [[], ["--json"]] do
+        assert {"", stderr, 1} =
+                 invoke(["incoming", "get-public", base <> "/payment", "--allow-http"] ++ options)
+
+        assert stderr == "Error: Incoming-payment read returned an invalid response.\n"
+        assert_received {:http_request, %{target: "/payment"}}
+      end
+
+      stop_supervised!(Task)
+    end
+  end
+
+  test "public incoming HTTP failures and redirects omit server details and do not replay" do
+    for status <- [302, 403, 404, 500] do
+      body = Jason.encode!(%{"error" => %{"description" => "private-token"}})
+      base = HTTPServer.start({status, [{"location", "/elsewhere"}], body})
+
+      assert {"", stderr, 1} =
+               invoke(["incoming", "get-public", base <> "/payment", "--allow-http", "--json"])
+
+      assert stderr == "Error: Incoming-payment read failed (HTTP #{status}).\n"
+      assert_received {:http_request, %{target: "/payment"}}
+      refute_receive {:http_request, _}, 20
+      stop_supervised!(Task)
+    end
+  end
+
+  test "public incoming transport failures return status 1 without retrying" do
+    base = HTTPServer.start(:close)
+
+    assert {"", stderr, 1} =
+             invoke(["incoming", "get-public", base <> "/payment", "--allow-http"])
+
+    assert stderr == "Error: Incoming-payment read failed due to a transport error.\n"
+    assert_received {:http_request, %{target: "/payment"}}
+    refute_receive {:http_request, _}, 20
+  end
+
+  test "public incoming reads support empty method arrays" do
+    response = Map.put(@incoming_payment, "methods", [])
+    base = HTTPServer.start({200, [], Jason.encode!(response)})
+
+    assert {stdout, "", 0} =
+             invoke(["incoming", "get-public", base <> "/payment", "--allow-http", "--json"])
+
+    assert Jason.decode!(stdout) == response
+    assert_received {:http_request, _}
   end
 
   defp assert_argument_error(argv, message) do

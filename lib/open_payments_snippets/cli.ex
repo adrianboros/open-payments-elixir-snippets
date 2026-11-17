@@ -6,8 +6,8 @@ defmodule OpenPaymentsSnippets.CLI do
   status. `main/1` is the escript entry point and terminates the VM with that status.
   """
 
-  alias OpenPayments.{Client, Error, WalletAddress}
-  alias OpenPayments.Types.JWKS
+  alias OpenPayments.{Client, Error, IncomingPayment, WalletAddress}
+  alias OpenPayments.Types.{JWKS, PublicIncomingPayment}
 
   @help """
   Usage: open-payments [command] [options]
@@ -17,12 +17,13 @@ defmodule OpenPaymentsSnippets.CLI do
     version             Show CLI, SDK, and Open Payments specification versions
     wallet get [address] Fetch public wallet information using a URL or payment pointer
     wallet keys [address] Fetch the wallet's public JSON Web Key Set
+    incoming get-public <url> Fetch public incoming-payment details
 
   Options:
     -h, --help          Show help
     -v, --version       Show version information
     --json              Format results as JSON
-    --allow-http        Allow HTTP development URLs for wallet commands
+    --allow-http        Allow HTTP development URLs for resource commands
 
   Wallet address defaults to the WALLET_ADDRESS environment variable.
 
@@ -51,11 +52,11 @@ defmodule OpenPaymentsSnippets.CLI do
         (options[:help] && options[:version]) || (command == :help && options[:version]) ->
           argument_error("Choose either help or version.")
 
-        options[:version] && match?({:wallet, _, _}, command) ->
-          argument_error("The --version option cannot be combined with wallet commands.")
+        options[:version] && is_tuple(command) ->
+          argument_error("The --version option cannot be combined with resource commands.")
 
-        Keyword.has_key?(options, :allow_http) && not match?({:wallet, _, _}, command) ->
-          argument_error("The --allow-http option requires wallet get or wallet keys.")
+        Keyword.has_key?(options, :allow_http) && not is_tuple(command) ->
+          argument_error("The --allow-http option requires a resource command.")
 
         options[:help] ->
           print_help(Keyword.get(options, :json, false))
@@ -76,6 +77,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["wallet", "get", address]), do: {:ok, {:wallet, :get, address}}
   defp command(["wallet", "keys"]), do: {:ok, {:wallet, :keys, nil}}
   defp command(["wallet", "keys", address]), do: {:ok, {:wallet, :keys, address}}
+  defp command(["incoming", "get-public"]), do: {:ok, {:incoming, :get_public, nil}}
+  defp command(["incoming", "get-public", url]), do: {:ok, {:incoming, :get_public, url}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
 
   defp execute(:default, options) do
@@ -87,11 +90,13 @@ defmodule OpenPaymentsSnippets.CLI do
   defp execute(:version, options), do: print_version(Keyword.get(options, :json, false))
 
   defp execute({:wallet, operation, address}, options) do
-    get_wallet(operation, address || System.get_env("WALLET_ADDRESS"), options)
+    get_resource(operation, address || System.get_env("WALLET_ADDRESS"), options)
   end
 
-  defp print_help(true),
-    do: argument_error("The --json option requires version, wallet get, or wallet keys.")
+  defp execute({:incoming, :get_public, url}, options),
+    do: get_resource(:get_public, url, options)
+
+  defp print_help(true), do: argument_error("The --json option requires a result command.")
 
   defp print_help(false) do
     IO.write(@help)
@@ -126,32 +131,44 @@ defmodule OpenPaymentsSnippets.CLI do
     application |> Application.spec(:vsn) |> to_string()
   end
 
-  defp get_wallet(_operation, address, _options) when address in [nil, ""] do
+  defp get_resource(:get_public, url, _options) when url in [nil, ""] do
+    argument_error("Supply a full incoming-payment URL.")
+  end
+
+  defp get_resource(_operation, address, _options) when address in [nil, ""] do
     argument_error("Supply a wallet address or set WALLET_ADDRESS.")
   end
 
-  defp get_wallet(operation, address, options) do
+  defp get_resource(operation, address, options) do
     with {:ok, client} <- Client.new_public(allow_http: Keyword.get(options, :allow_http, false)),
-         {:ok, resource} <- fetch_wallet(client, operation, address) do
-      IO.puts(format_wallet(resource, Keyword.get(options, :json, false)))
+         {:ok, resource} <- fetch_resource(client, operation, address) do
+      IO.puts(format_resource(resource, Keyword.get(options, :json, false)))
       0
     else
       {:error, %Error{kind: kind} = error} when kind in [:validation, :configuration] ->
-        argument_error(wallet_error(error))
+        argument_error(resource_error(error))
 
       {:error, %Error{} = error} ->
-        IO.puts(:stderr, "Error: #{wallet_error(error)}")
+        IO.puts(:stderr, "Error: #{resource_error(error)}")
         1
     end
   end
 
-  defp fetch_wallet(client, :get, address), do: WalletAddress.get(client, address)
-  defp fetch_wallet(client, :keys, address), do: WalletAddress.get_keys(client, address)
+  defp fetch_resource(client, :get, address), do: WalletAddress.get(client, address)
+  defp fetch_resource(client, :keys, address), do: WalletAddress.get_keys(client, address)
+  defp fetch_resource(client, :get_public, url), do: IncomingPayment.get_public(client, url)
 
-  defp format_wallet(wallet, true), do: Jason.encode!(wallet)
-  defp format_wallet(%JWKS{} = keys, false), do: Jason.encode!(keys, pretty: true)
+  defp format_resource(%PublicIncomingPayment{} = payment, json?) do
+    payment
+    |> PublicIncomingPayment.to_map()
+    |> redact_shared_secrets()
+    |> Jason.encode!(pretty: not json?)
+  end
 
-  defp format_wallet(wallet, false) do
+  defp format_resource(resource, true), do: Jason.encode!(resource)
+  defp format_resource(%JWKS{} = keys, false), do: Jason.encode!(keys, pretty: true)
+
+  defp format_resource(wallet, false) do
     [
       {"Wallet address", wallet.id},
       {"Public name", wallet.public_name},
@@ -163,20 +180,42 @@ defmodule OpenPaymentsSnippets.CLI do
     |> Enum.map_join("\n", fn {label, value} -> "#{label}  #{value}" end)
   end
 
-  defp wallet_error(%Error{kind: :validation}) do
+  defp redact_shared_secrets(data) when is_map(data) do
+    Map.new(data, fn
+      {"sharedSecret", _value} -> {"sharedSecret", "[REDACTED]"}
+      {key, value} -> {key, redact_shared_secrets(value)}
+    end)
+  end
+
+  defp redact_shared_secrets(data) when is_list(data),
+    do: Enum.map(data, &redact_shared_secrets/1)
+
+  defp redact_shared_secrets(value), do: value
+
+  defp resource_error(%Error{kind: :validation, operation: :get_public_incoming_payment}) do
+    "Invalid incoming-payment URL. Use a full HTTPS resource URL; local HTTP requires --allow-http."
+  end
+
+  defp resource_error(%Error{kind: :validation}) do
     "Invalid wallet address. Use an HTTPS URL or payment pointer; local HTTP requires --allow-http."
   end
 
-  defp wallet_error(%Error{kind: :configuration}), do: "Invalid wallet client configuration."
+  defp resource_error(%Error{kind: :configuration}),
+    do: "Invalid Open Payments client configuration."
 
-  defp wallet_error(%Error{kind: :http, status: status}),
-    do: "Wallet discovery failed (HTTP #{status})."
+  defp resource_error(%Error{kind: :http, status: status} = error),
+    do: "#{resource_label(error)} failed (HTTP #{status})."
 
-  defp wallet_error(%Error{kind: :transport}),
-    do: "Wallet discovery failed due to a transport error."
+  defp resource_error(%Error{kind: :transport} = error),
+    do: "#{resource_label(error)} failed due to a transport error."
 
-  defp wallet_error(%Error{kind: :decoding}),
-    do: "Wallet discovery returned an invalid response."
+  defp resource_error(%Error{kind: :decoding} = error),
+    do: "#{resource_label(error)} returned an invalid response."
+
+  defp resource_label(%Error{operation: :get_public_incoming_payment}),
+    do: "Incoming-payment read"
+
+  defp resource_label(_error), do: "Wallet discovery"
 
   defp argument_error(message) do
     IO.puts(:stderr, "Error: #{message}\nRun open-payments help for usage.")

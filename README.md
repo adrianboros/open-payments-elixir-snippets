@@ -73,6 +73,8 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments wallet get [address] --json` | Public wallet information with the SDK's JSON field mappings |
 | `open-payments wallet keys [address]` | Fetch and validate the wallet's public JWKS, displayed as formatted JSON |
 | `open-payments wallet keys [address] --json` | The public JWKS as compact JSON |
+| `open-payments incoming get-public <url>` | Fetch public incoming-payment details as formatted JSON |
+| `open-payments incoming get-public <url> --json` | Public incoming-payment details as compact JSON |
 
 Version JSON keys are `cli_version`, `sdk_version`, `specification_version`, and
 `specification_revision`. The SDK supplies the specification metadata. Wallet
@@ -82,8 +84,8 @@ preserves the SDK's returned extension fields.
 Key-set JSON contains a `keys` array of public JWK objects using the SDK's
 encoders. Empty sets and duplicate key IDs retain the SDK's supported behavior.
 
-Options accept standard boolean values and negation. `--json` applies to version
-and wallet results. Unknown commands, extra arguments, conflicting help/version requests,
+Options accept standard boolean values and negation. `--json` applies to version,
+wallet, and incoming-payment results. Unknown commands, extra arguments, conflicting help/version requests,
 and unknown or invalid options produce diagnostics. See the [OptionParser documentation](https://elixir.hexdocs.pm/OptionParser.html).
 
 Results go to stdout. Diagnostics go to stderr. Exit statuses are 0 for success,
@@ -130,6 +132,30 @@ identifiers and missing configuration return status 2. Diagnostics include the
 failure category and HTTP status when available, while server error bodies stay
 out of diagnostics.
 
+## Public incoming-payment reads
+
+Use an existing incoming-payment resource URL to fetch its public details.
+
+```sh
+./open-payments incoming get-public 'https://payments.example/tenant/incoming-payments/payment-1'
+./open-payments incoming get-public 'https://payments.example/tenant/incoming-payments/payment-1' --json
+```
+
+The command requires a full resource URL. The SDK preserves its path, query, and
+supported port. Wallet payment pointers identify wallets; supply the complete
+incoming-payment URL returned when that payment was created. `WALLET_ADDRESS`
+provides defaults only for wallet commands.
+
+Reads are unsigned and require no signing key or access token. The SDK handles
+HTTP, response decoding, protocol validation, redirects and retries. Local HTTP
+requires `--allow-http`. Invalid or missing URLs return status 2. HTTP, transport,
+and invalid response failures return status 1 with safe diagnostics on stderr.
+
+Default output is formatted JSON, and `--json` produces compact JSON. Amounts,
+timestamps, returned URLs, optional fields, and extensions use the SDK's JSON
+representation. Fields named `sharedSecret`, including those nested in
+extensions, display `[REDACTED]` in both modes.
+
 ## Development
 
 ```sh
@@ -139,6 +165,6 @@ mix compile --warnings-as-errors
 ```
 
 After fetching dependencies, the test suite runs offline and uses a local HTTP
-server for wallet discovery tests. `OpenPaymentsSnippets.CLI.run/1` returns
+server for wallet and public incoming-payment tests. `OpenPaymentsSnippets.CLI.run/1` returns
 the exit status for callers and tests. The executable entry point `main/1`
 terminates the VM with that status.
