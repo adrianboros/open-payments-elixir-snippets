@@ -58,8 +58,9 @@ set -a
 set +a
 ```
 
-The current help/version commands require no wallet settings. Automatic `.env`
-loading and wallet configuration consumption have yet to be implemented.
+`wallet get` uses the exported `WALLET_ADDRESS` when no address argument is
+supplied. This public operation requires no signing key. Automatic `.env`
+loading remains pending, so load the file into your shell before invoking it.
 
 ## Commands and output
 
@@ -68,16 +69,48 @@ loading and wallet configuration consumption have yet to be implemented.
 | `open-payments`, `open-payments help`, `open-payments --help`, `open-payments -h` | Usage and available commands |
 | `open-payments version`, `open-payments --version`, `open-payments -v` | CLI version, SDK version, Open Payments specification version and revision |
 | `open-payments version --json` | The same version data as a JSON object |
+| `open-payments wallet get [address]` | Fetch and validate public wallet information |
+| `open-payments wallet get [address] --json` | Public wallet information with the SDK's JSON field mappings |
 
-JSON keys are `cli_version`, `sdk_version`, `specification_version`, and
-`specification_revision`. The SDK supplies the specification metadata.
+Version JSON keys are `cli_version`, `sdk_version`, `specification_version`, and
+`specification_revision`. The SDK supplies the specification metadata. Wallet
+JSON uses Open Payments field names such as `assetCode` and `authServer`, and
+preserves the SDK's returned extension fields.
 
 Options accept standard boolean values and negation. `--json` applies to version
-output. Unknown commands, extra arguments, conflicting help/version requests,
+and wallet results. Unknown commands, extra arguments, conflicting help/version requests,
 and unknown or invalid options produce diagnostics. See the [OptionParser documentation](https://elixir.hexdocs.pm/OptionParser.html).
 
 Results go to stdout. Diagnostics go to stderr. Exit statuses are 0 for success,
 1 for operation/runtime failures, and 2 for argument/configuration errors.
+
+## Wallet discovery
+
+Pass a wallet URL or a quoted payment pointer, or use the exported wallet setting.
+An explicit address takes precedence over `WALLET_ADDRESS`.
+
+```sh
+./open-payments wallet get 'https://wallet.example/alice'
+./open-payments wallet get '$wallet.example/alice' --json
+./open-payments wallet get --json
+```
+
+The SDK resolves payment pointers and validates responses. A root pointer such
+as `$wallet.example` uses `https://wallet.example/.well-known/pay`. Returned
+authorization and resource-server URLs retain their paths.
+
+For a local development server, explicitly enable HTTP.
+
+```sh
+./open-payments wallet get 'http://localhost:3000/accounts/alice' --allow-http
+```
+
+HTTP is disabled by default. Discovery uses an unsigned GET. The SDK handles
+transport, validation, redirects, and retry policy. HTTP, transport, and invalid
+response failures return status 1 with a diagnostic on stderr. Invalid wallet
+identifiers and missing configuration return status 2. Diagnostics include the
+failure category and HTTP status when available, while server error bodies stay
+out of diagnostics.
 
 ## Development
 
@@ -87,7 +120,7 @@ mix format --check-formatted
 mix compile --warnings-as-errors
 ```
 
-After fetching dependencies, the test suite runs offline. The foundation commands
-require no wallet, credentials, or server. `OpenPaymentsSnippets.CLI.run/1` returns
+After fetching dependencies, the test suite runs offline and uses a local HTTP
+server for wallet discovery tests. `OpenPaymentsSnippets.CLI.run/1` returns
 the exit status for callers and tests. The executable entry point `main/1`
 terminates the VM with that status.

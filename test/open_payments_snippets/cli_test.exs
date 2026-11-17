@@ -4,6 +4,27 @@ defmodule OpenPaymentsSnippets.CLITest do
   import ExUnit.CaptureIO
 
   alias OpenPaymentsSnippets.CLI
+  alias OpenPaymentsSnippets.Test.HTTPServer
+
+  @wallet %{
+    "id" => "https://wallet.example/accounts/alice",
+    "publicName" => "Alice",
+    "assetCode" => "USD",
+    "assetScale" => 2,
+    "authServer" => "https://auth.example/tenants/alice",
+    "resourceServer" => "https://payments.example/tenants/alice"
+  }
+
+  setup do
+    previous = System.get_env("WALLET_ADDRESS")
+    System.delete_env("WALLET_ADDRESS")
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("WALLET_ADDRESS", previous),
+        else: System.delete_env("WALLET_ADDRESS")
+    end)
+  end
 
   test "no arguments, help command, and help flags show available commands" do
     for argv <- [[], ["help"], ["--help"], ["-h"], ["version", "--help"]] do
@@ -103,9 +124,9 @@ defmodule OpenPaymentsSnippets.CLITest do
     end
   end
 
-  test "JSON requires a version request" do
+  test "JSON requires a result command" do
     for argv <- [["--json"], ["help", "--json"], ["--help", "--json"]] do
-      assert_argument_error(argv, "The --json option requires version.")
+      assert_argument_error(argv, "The --json option requires version or wallet get.")
     end
   end
 
@@ -119,6 +140,134 @@ defmodule OpenPaymentsSnippets.CLITest do
       refute stderr =~ "sensitive-input"
       assert stderr =~ "Error:"
     end
+  end
+
+  test "wallet get uses the SDK over HTTP and displays public wallet fields" do
+    base = HTTPServer.start({200, [{"content-type", "application/json"}], Jason.encode!(@wallet)})
+    {stdout, stderr, status} = invoke(["wallet", "get", base <> "/tenant/alice", "--allow-http"])
+
+    assert status == 0
+    assert stderr == ""
+    assert stdout =~ "Wallet address  #{@wallet["id"]}"
+    assert stdout =~ "Public name  Alice"
+    assert stdout =~ "Asset  USD (scale 2)"
+    assert stdout =~ "Authorization server  #{@wallet["authServer"]}"
+    assert stdout =~ "Resource server  #{@wallet["resourceServer"]}"
+    assert_received {:http_request, %{method: :GET, target: "/tenant/alice", headers: headers}}
+    assert headers["accept"] == "application/json"
+    refute Map.has_key?(headers, "signature")
+    refute Map.has_key?(headers, "authorization")
+  end
+
+  test "wallet JSON preserves SDK field mappings, extensions, and returned URLs" do
+    response = Map.put(@wallet, "custom", %{"enabled" => true})
+    base = HTTPServer.start({200, [], Jason.encode!(response)})
+
+    {stdout, stderr, status} =
+      invoke(["--json", "wallet", "get", base <> "/alice", "--allow-http"])
+
+    assert status == 0
+    assert stderr == ""
+    assert Jason.decode!(stdout) == response
+    assert_received {:http_request, %{target: "/alice"}}
+  end
+
+  test "wallet get reads WALLET_ADDRESS and an explicit address takes precedence" do
+    base = HTTPServer.start({200, [], Jason.encode!(@wallet)})
+    System.put_env("WALLET_ADDRESS", base <> "/default-wallet")
+
+    assert {_stdout, "", 0} = invoke(["wallet", "get", "--allow-http"])
+    assert_received {:http_request, %{target: "/default-wallet"}}
+
+    assert {_stdout, "", 0} = invoke(["wallet", "get", base <> "/explicit", "--allow-http"])
+    assert_received {:http_request, %{target: "/explicit"}}
+  end
+
+  test "missing wallet settings and malformed commands fail before any request" do
+    base = HTTPServer.start({200, [], Jason.encode!(@wallet)})
+
+    for argv <- [["wallet", "get"], ["wallet", "get", ""]] do
+      assert_argument_error(argv, "Supply a wallet address or set WALLET_ADDRESS.")
+    end
+
+    for argv <- [
+          ["wallet"],
+          ["wallet", "unknown"],
+          ["wallet", "get", base, "extra"],
+          ["wallet", "get", base, "--allow-http=invalid"],
+          ["wallet", "get", base, "--allow-http", "--unknown"]
+        ] do
+      assert {"", _stderr, 2} = invoke(argv)
+    end
+
+    refute_received {:http_request, _}
+  end
+
+  test "SDK rejects invalid identifiers and HTTP without explicit opt-in before requesting" do
+    base = HTTPServer.start({200, [], Jason.encode!(@wallet)})
+
+    for address <- [base <> "/alice", "not-a-wallet", "$wallet.example/alice?secret", " "] do
+      assert_argument_error(
+        ["wallet", "get", address],
+        "Invalid wallet address. Use an HTTPS URL or payment pointer; local HTTP requires --allow-http."
+      )
+    end
+
+    assert {"", _stderr, 2} = invoke(["wallet", "get", base, "--no-allow-http"])
+    refute_received {:http_request, _}
+  end
+
+  test "wallet help makes no request and wallet-only options have command scope" do
+    base = HTTPServer.start({200, [], Jason.encode!(@wallet)})
+
+    for argv <- [
+          ["wallet", "get", "--help"],
+          ["wallet", "get", base, "--help", "--allow-http"]
+        ] do
+      {stdout, "", 0} = invoke(argv)
+      assert stdout =~ "wallet get"
+    end
+
+    for argv <- [["version", "--allow-http"], ["help", "--allow-http"]] do
+      assert_argument_error(argv, "The --allow-http option requires wallet get.")
+    end
+
+    assert_argument_error(
+      ["wallet", "get", base, "--version"],
+      "The --version option cannot be combined with wallet get."
+    )
+
+    refute_received {:http_request, _}
+  end
+
+  test "HTTP failures and redirects return status 1 and omit server error contents" do
+    for status <- [302, 404, 500] do
+      body = Jason.encode!(%{"error" => %{"code" => "private-value", "description" => "secret"}})
+      base = HTTPServer.start({status, [{"location", "/elsewhere"}], body})
+      {"", stderr, 1} = invoke(["wallet", "get", base <> "/alice", "--allow-http", "--json"])
+      assert stderr == "Error: Wallet discovery failed (HTTP #{status}).\n"
+      assert_received {:http_request, %{target: "/alice"}}
+      refute_receive {:http_request, _}, 20
+      stop_supervised!(Task)
+    end
+  end
+
+  test "malformed and schema-invalid wallet responses return status 1" do
+    for body <- ["not-json", "{}", Jason.encode!(Map.put(@wallet, "assetScale", 256))] do
+      base = HTTPServer.start({200, [], body})
+      {"", stderr, 1} = invoke(["wallet", "get", base <> "/alice", "--allow-http"])
+      assert stderr == "Error: Wallet discovery returned an invalid response.\n"
+      assert_received {:http_request, _}
+      stop_supervised!(Task)
+    end
+  end
+
+  test "transport failures return status 1 without retrying" do
+    base = HTTPServer.start(:close)
+    {"", stderr, 1} = invoke(["wallet", "get", base <> "/alice", "--allow-http"])
+    assert stderr == "Error: Wallet discovery failed due to a transport error.\n"
+    assert_received {:http_request, _}
+    refute_receive {:http_request, _}, 20
   end
 
   defp assert_argument_error(argv, message) do

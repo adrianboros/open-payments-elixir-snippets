@@ -6,17 +6,23 @@ defmodule OpenPaymentsSnippets.CLI do
   status. `main/1` is the escript entry point and terminates the VM with that status.
   """
 
+  alias OpenPayments.{Client, Error, WalletAddress}
+
   @help """
   Usage: open-payments [command] [options]
 
   Commands:
     help                Show this help
     version             Show CLI, SDK, and Open Payments specification versions
+    wallet get [address] Fetch public wallet information using a URL or payment pointer
 
   Options:
     -h, --help          Show help
     -v, --version       Show version information
-    --json              Format version information as JSON
+    --json              Format results as JSON
+    --allow-http        Allow HTTP development URLs for wallet get
+
+  Wallet address defaults to the WALLET_ADDRESS environment variable.
 
   Exit statuses:
     0  Success
@@ -33,35 +39,54 @@ defmodule OpenPaymentsSnippets.CLI do
   def run(argv) do
     {options, arguments, invalid} =
       OptionParser.parse(argv,
-        strict: [help: :boolean, version: :boolean, json: :boolean],
+        strict: [help: :boolean, version: :boolean, json: :boolean, allow_http: :boolean],
         aliases: [h: :help, v: :version]
       )
 
-    json? = Keyword.get(options, :json, false)
+    with [] <- invalid,
+         {:ok, command} <- command(arguments) do
+      cond do
+        (options[:help] && options[:version]) || (command == :help && options[:version]) ->
+          argument_error("Choose either help or version.")
 
-    cond do
-      invalid != [] ->
-        argument_error("Unknown option or invalid option value.")
+        options[:version] && match?({:wallet_get, _}, command) ->
+          argument_error("The --version option cannot be combined with wallet get.")
 
-      options[:help] && options[:version] ->
-        argument_error("Choose either help or version.")
+        Keyword.has_key?(options, :allow_http) && not match?({:wallet_get, _}, command) ->
+          argument_error("The --allow-http option requires wallet get.")
 
-      arguments not in [[], ["help"], ["version"]] ->
-        argument_error("Unknown command or unexpected arguments.")
+        options[:help] ->
+          print_help(Keyword.get(options, :json, false))
 
-      options[:version] && arguments == ["help"] ->
-        argument_error("Choose either help or version.")
-
-      options[:help] || arguments == ["help"] ||
-          (arguments == [] && !options[:version]) ->
-        print_help(json?)
-
-      true ->
-        print_version(json?)
+        true ->
+          execute(command, options)
+      end
+    else
+      [_ | _] -> argument_error("Unknown option or invalid option value.")
+      {:error, message} -> argument_error(message)
     end
   end
 
-  defp print_help(true), do: argument_error("The --json option requires version.")
+  defp command([]), do: {:ok, :default}
+  defp command(["help"]), do: {:ok, :help}
+  defp command(["version"]), do: {:ok, :version}
+  defp command(["wallet", "get"]), do: {:ok, {:wallet_get, nil}}
+  defp command(["wallet", "get", address]), do: {:ok, {:wallet_get, address}}
+  defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
+
+  defp execute(:default, options) do
+    command = if options[:version], do: :version, else: :help
+    execute(command, options)
+  end
+
+  defp execute(:help, options), do: print_help(Keyword.get(options, :json, false))
+  defp execute(:version, options), do: print_version(Keyword.get(options, :json, false))
+
+  defp execute({:wallet_get, address}, options) do
+    get_wallet(address || System.get_env("WALLET_ADDRESS"), options)
+  end
+
+  defp print_help(true), do: argument_error("The --json option requires version or wallet get.")
 
   defp print_help(false) do
     IO.write(@help)
@@ -95,6 +120,54 @@ defmodule OpenPaymentsSnippets.CLI do
   defp application_version(application) do
     application |> Application.spec(:vsn) |> to_string()
   end
+
+  defp get_wallet(address, _options) when address in [nil, ""] do
+    argument_error("Supply a wallet address or set WALLET_ADDRESS.")
+  end
+
+  defp get_wallet(address, options) do
+    with {:ok, client} <- Client.new_public(allow_http: Keyword.get(options, :allow_http, false)),
+         {:ok, wallet} <- WalletAddress.get(client, address) do
+      IO.puts(format_wallet(wallet, Keyword.get(options, :json, false)))
+      0
+    else
+      {:error, %Error{kind: kind} = error} when kind in [:validation, :configuration] ->
+        argument_error(wallet_error(error))
+
+      {:error, %Error{} = error} ->
+        IO.puts(:stderr, "Error: #{wallet_error(error)}")
+        1
+    end
+  end
+
+  defp format_wallet(wallet, true), do: Jason.encode!(wallet)
+
+  defp format_wallet(wallet, false) do
+    [
+      {"Wallet address", wallet.id},
+      {"Public name", wallet.public_name},
+      {"Asset", "#{wallet.asset_code} (scale #{wallet.asset_scale})"},
+      {"Authorization server", wallet.auth_server},
+      {"Resource server", wallet.resource_server}
+    ]
+    |> Enum.reject(fn {_label, value} -> is_nil(value) end)
+    |> Enum.map_join("\n", fn {label, value} -> "#{label}  #{value}" end)
+  end
+
+  defp wallet_error(%Error{kind: :validation}) do
+    "Invalid wallet address. Use an HTTPS URL or payment pointer; local HTTP requires --allow-http."
+  end
+
+  defp wallet_error(%Error{kind: :configuration}), do: "Invalid wallet client configuration."
+
+  defp wallet_error(%Error{kind: :http, status: status}),
+    do: "Wallet discovery failed (HTTP #{status})."
+
+  defp wallet_error(%Error{kind: :transport}),
+    do: "Wallet discovery failed due to a transport error."
+
+  defp wallet_error(%Error{kind: :decoding}),
+    do: "Wallet discovery returned an invalid response."
 
   defp argument_error(message) do
     IO.puts(:stderr, "Error: #{message}\nRun open-payments help for usage.")
