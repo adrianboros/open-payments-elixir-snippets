@@ -20,14 +20,16 @@ defmodule OpenPaymentsSnippets.CLI do
     wallet keys [address] Fetch the wallet's public JSON Web Key Set
     incoming get-public <url> Fetch public incoming-payment details
     keys validate       Validate an existing Ed25519 signing key offline
+    keys public         Export the configured key's public JWK offline
 
   Options:
     -h, --help          Show help
     -v, --version       Show version information
     --json              Format results as JSON
     --allow-http        Allow HTTP development URLs for resource commands
-    --key-id <id>       Override KEY_ID for keys validate
-    --key-file <path>   Select a PEM file for keys validate
+    --key-id <id>       Override KEY_ID for key commands
+    --key-file <path>   Select a PEM file for key commands
+    --jwks              Export a key set with keys public
 
   Wallet address defaults to the WALLET_ADDRESS environment variable.
 
@@ -52,7 +54,8 @@ defmodule OpenPaymentsSnippets.CLI do
           json: :boolean,
           allow_http: :boolean,
           key_id: :string,
-          key_file: :string
+          key_file: :string,
+          jwks: :boolean
         ],
         aliases: [h: :help, v: :version]
       )
@@ -70,8 +73,11 @@ defmodule OpenPaymentsSnippets.CLI do
           argument_error("The --allow-http option requires a resource command.")
 
         (Keyword.has_key?(options, :key_id) || Keyword.has_key?(options, :key_file)) &&
-            command != {:keys, :validate} ->
-          argument_error("Signing-key options require keys validate.")
+            not match?({:keys, _}, command) ->
+          argument_error("Signing-key options require keys validate or keys public.")
+
+        Keyword.has_key?(options, :jwks) && command != {:keys, :public} ->
+          argument_error("The --jwks option requires keys public.")
 
         options[:help] ->
           print_help(Keyword.get(options, :json, false))
@@ -95,6 +101,7 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["incoming", "get-public"]), do: {:ok, {:incoming, :get_public, nil}}
   defp command(["incoming", "get-public", url]), do: {:ok, {:incoming, :get_public, url}}
   defp command(["keys", "validate"]), do: {:ok, {:keys, :validate}}
+  defp command(["keys", "public"]), do: {:ok, {:keys, :public}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
 
   defp execute(:default, options) do
@@ -112,10 +119,16 @@ defmodule OpenPaymentsSnippets.CLI do
   defp execute({:incoming, :get_public, url}, options),
     do: get_resource(:get_public, url, options)
 
-  defp execute({:keys, :validate}, options) do
-    case Keys.validate(options) do
+  defp execute({:keys, operation}, options) do
+    outcome =
+      case operation do
+        :validate -> Keys.validate(options)
+        :public -> Keys.public(options)
+      end
+
+    case outcome do
       {:ok, result} ->
-        IO.puts(format_key_validation(result, Keyword.get(options, :json, false)))
+        IO.puts(format_key_result(result, Keyword.get(options, :json, false)))
         0
 
       {:error, message} ->
@@ -123,10 +136,10 @@ defmodule OpenPaymentsSnippets.CLI do
     end
   end
 
-  defp format_key_validation(result, true), do: Jason.encode!(result)
-
-  defp format_key_validation(result, false),
+  defp format_key_result(%{valid: true} = result, false),
     do: "Valid Ed25519 signing key\nKey ID  #{result.key_id}"
+
+  defp format_key_result(result, json?), do: Jason.encode!(result, pretty: not json?)
 
   defp print_help(true), do: argument_error("The --json option requires a result command.")
 

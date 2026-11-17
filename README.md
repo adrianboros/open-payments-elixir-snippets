@@ -77,6 +77,8 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments incoming get-public <url> --json` | Public incoming-payment details as compact JSON |
 | `open-payments keys validate` | Validate an existing Ed25519 signing key offline |
 | `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
+| `open-payments keys public` | Export the configured key's public JWK as formatted JSON |
+| `open-payments keys public --jwks` | Export a public JWKS containing that key |
 
 Version JSON keys are `cli_version`, `sdk_version`, `specification_version`, and
 `specification_revision`. The SDK supplies the specification metadata. Wallet
@@ -87,7 +89,7 @@ Key-set JSON contains a `keys` array of public JWK objects using the SDK's
 encoders. Empty sets and duplicate key IDs retain the SDK's supported behavior.
 
 Options accept standard boolean values and negation. `--json` applies to version,
-wallet, incoming-payment, and key-validation results. Unknown commands, extra arguments, conflicting help/version requests,
+wallet, incoming-payment, and key-command results. Unknown commands, extra arguments, conflicting help/version requests,
 and unknown or invalid options produce diagnostics. See the [OptionParser documentation](https://elixir.hexdocs.pm/OptionParser.html).
 
 Results go to stdout. Diagnostics go to stderr. Exit statuses are 0 for success,
@@ -179,13 +181,30 @@ or `PRIVATE_KEY_BASE64`.
 count as unset. If both environment key sources are populated, the command
 returns a configuration error. `--key-file` selects a file for the current
 invocation and takes precedence over the environment key sources. `--key-id`
-takes precedence over `KEY_ID`. These flags apply to `keys validate`.
+takes precedence over `KEY_ID`. These flags apply to `keys validate` and `keys public`.
 
 The SDK performs key import and validation. Success returns status 0 and shows
 the key ID. JSON output contains `valid: true` and `key_id`. Missing or invalid
 configuration returns status 2 with a diagnostic on stderr. Output omits private
 key material and file paths. This offline check requires no wallet address or
 server.
+
+## Public signing-key export
+
+Export public registration data from the configured signing key.
+
+```sh
+./open-payments keys public
+./open-payments keys public --json
+./open-payments keys public --jwks --json
+```
+
+`keys public` uses the same `KEY_ID`, PEM file/base64 settings, and flag overrides
+as `keys validate`. The SDK imports the existing key, derives its public data,
+and encodes the exported JWK or JWKS. Output contains the public fields `kid`,
+`alg`, `kty`, `crv`, and `x`. The `--jwks` option wraps the JWK in a `keys` array.
+Default output is formatted JSON, and `--json` produces compact JSON. This
+operation runs offline and writes the result to stdout.
 
 ## Development
 

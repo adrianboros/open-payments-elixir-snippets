@@ -2,13 +2,29 @@ defmodule OpenPaymentsSnippets.Commands.Keys do
   @moduledoc false
 
   alias OpenPayments.{Error, Key}
+  alias OpenPayments.Types.{JWK, JWKS}
 
   @spec validate(keyword()) :: {:ok, %{valid: true, key_id: String.t()}} | {:error, String.t()}
   def validate(options) do
+    with {:ok, key} <- load_key(options),
+         do: {:ok, %{valid: true, key_id: Key.key_id(key)}}
+  end
+
+  @spec public(keyword()) :: {:ok, JWK.t() | JWKS.t()} | {:error, String.t()}
+  def public(options) do
+    with {:ok, key} <- load_key(options) do
+      public =
+        if Keyword.get(options, :jwks, false), do: Key.public_jwks(key), else: Key.public_jwk(key)
+
+      {:ok, public}
+    end
+  end
+
+  defp load_key(options) do
     with {:ok, key_id} <- key_id(options),
          {:ok, source} <- key_source(options),
          {:ok, key} <- import_key(source, key_id) do
-      {:ok, %{valid: true, key_id: Key.key_id(key)}}
+      {:ok, key}
     else
       {:error, %Error{}} ->
         {:error, "Invalid signing key. Check the key source, PEM format, and key ID."}

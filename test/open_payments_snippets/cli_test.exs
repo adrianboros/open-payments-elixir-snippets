@@ -749,11 +749,134 @@ defmodule OpenPaymentsSnippets.CLITest do
           ["version", "--key-file", "private-path"],
           ["wallet", "get", "--key-id", "id"]
         ] do
-      assert_argument_error(arguments, "Signing-key options require keys validate.")
+      assert_argument_error(
+        arguments,
+        "Signing-key options require keys validate or keys public."
+      )
     end
 
     assert_argument_error(
       ["keys", "validate", "--version"],
+      "The --version option cannot be combined with another command."
+    )
+  end
+
+  test "keys public exports the RFC 8032 public JWK from an existing PEM file" do
+    path = write_key(@pem)
+    previous = File.stat!(path)
+    expected = Map.put(@key, "kid", "registered-key")
+
+    for options <- [[], ["--json"], ["--no-jwks", "--json"]] do
+      assert {stdout, "", 0} =
+               invoke(
+                 ["keys", "public", "--key-file", path, "--key-id", "registered-key"] ++ options
+               )
+
+      assert Jason.decode!(stdout) == expected
+      assert String.contains?(String.trim_trailing(stdout), "\n") == (options == [])
+      refute stdout =~ "PRIVATE KEY"
+      refute stdout =~ "MC4CAQ"
+      refute stdout =~ path
+    end
+
+    assert File.read!(path) == @pem
+    assert File.stat!(path).mtime == previous.mtime
+  end
+
+  test "keys public wraps the exported public key in a JWKS only when requested" do
+    System.put_env("KEY_ID", "registered-key")
+    System.put_env("PRIVATE_KEY_FILE", write_key(@pem))
+
+    for options <- [["--jwks"], ["--jwks", "--json"], ["--jwks=true", "--json"]] do
+      assert {stdout, "", 0} = invoke(["keys", "public"] ++ options)
+      assert Jason.decode!(stdout) == %{"keys" => [Map.put(@key, "kid", "registered-key")]}
+      assert String.contains?(String.trim_trailing(stdout), "\n") == (options == ["--jwks"])
+      refute stdout =~ "MC4CAQ"
+    end
+  end
+
+  test "keys public supports base64 PEM and shares explicit flag precedence" do
+    System.put_env("KEY_ID", "base64-key")
+    System.put_env("PRIVATE_KEY_BASE64", Base.encode64(@pem))
+
+    assert {stdout, "", 0} = invoke(["keys", "public", "--json"])
+    assert Jason.decode!(stdout) == Map.put(@key, "kid", "base64-key")
+
+    System.put_env("PRIVATE_KEY_FILE", "/invalid-path")
+    System.put_env("PRIVATE_KEY_BASE64", "invalid-base64")
+
+    assert {stdout, "", 0} =
+             invoke([
+               "keys",
+               "public",
+               "--key-file",
+               write_key(@pem),
+               "--key-id",
+               "explicit-key",
+               "--json"
+             ])
+
+    assert Jason.decode!(stdout) == Map.put(@key, "kid", "explicit-key")
+  end
+
+  test "keys public rejects missing, conflicting and invalid settings without exporting input" do
+    assert_argument_error(["keys", "public"], "Supply --key-id or set KEY_ID.")
+    System.put_env("KEY_ID", "registered-key")
+
+    assert_argument_error(
+      ["keys", "public"],
+      "Supply --key-file or set PRIVATE_KEY_FILE or PRIVATE_KEY_BASE64."
+    )
+
+    System.put_env("PRIVATE_KEY_FILE", write_key(@pem))
+    System.put_env("PRIVATE_KEY_BASE64", Base.encode64(@pem))
+
+    assert_argument_error(
+      ["keys", "public", "--jwks"],
+      "Set only one of PRIVATE_KEY_FILE and PRIVATE_KEY_BASE64."
+    )
+
+    System.delete_env("PRIVATE_KEY_FILE")
+    System.put_env("PRIVATE_KEY_BASE64", "private-value!")
+
+    for options <- [[], ["--jwks", "--json"]] do
+      assert_argument_error(
+        ["keys", "public"] ++ options,
+        "Invalid signing key. Check the key source, PEM format, and key ID."
+      )
+    end
+
+    assert_argument_error(
+      ["keys", "public", "--key-file", "/private-value/missing.pem", "--json"],
+      "Invalid signing key. Check the key source, PEM format, and key ID."
+    )
+  end
+
+  test "keys public help skips key import and JWKS selection is scoped to public export" do
+    assert {stdout, "", 0} = invoke(["keys", "public", "--jwks", "--help"])
+    assert stdout =~ "keys public"
+
+    for arguments <- [
+          ["keys", "public", "extra"],
+          ["keys", "public", "--jwks=invalid"],
+          ["keys", "public", "--key-id"],
+          ["keys", "public", "--key-file"],
+          ["keys", "public", "--unknown"]
+        ] do
+      assert {"", _stderr, 2} = invoke(arguments)
+    end
+
+    for arguments <- [["keys", "validate", "--jwks"], ["version", "--no-jwks"]] do
+      assert_argument_error(arguments, "The --jwks option requires keys public.")
+    end
+
+    assert_argument_error(
+      ["keys", "public", "--allow-http"],
+      "The --allow-http option requires a resource command."
+    )
+
+    assert_argument_error(
+      ["keys", "public", "--version"],
       "The --version option cannot be combined with another command."
     )
   end
