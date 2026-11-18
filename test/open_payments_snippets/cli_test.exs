@@ -139,7 +139,7 @@ defmodule OpenPaymentsSnippets.CLITest do
     end
   end
 
-  test "unknown commands, extra arguments, and missing future subcommands fail" do
+  test "unknown commands, extra arguments, and missing subcommands fail" do
     for argv <- [
           ["unknown"],
           ["version", "extra"],
@@ -1043,6 +1043,85 @@ defmodule OpenPaymentsSnippets.CLITest do
 
     assert_argument_error(
       ["grant", "validate", "file", "--version"],
+      "The --version option cannot be combined with another command."
+    )
+  end
+
+  test "pointer resolve delegates root, path, encoded and IP inputs to the SDK" do
+    for {pointer, url} <- [
+          {"$wallet.example", "https://wallet.example/.well-known/pay"},
+          {"$wallet.example/", "https://wallet.example/.well-known/pay"},
+          {"$wallet.example/alice", "https://wallet.example/alice"},
+          {"$Wallet.Example/Alice%20Account/", "https://Wallet.Example/Alice%20Account/"},
+          {"$192.0.2.1/alice", "https://192.0.2.1/alice"},
+          {"$[2001:db8::1]", "https://[2001:db8::1]/.well-known/pay"}
+        ] do
+      assert {stdout, "", 0} = invoke(["pointer", "resolve", pointer])
+      assert stdout == url <> "\n"
+
+      assert {stdout, "", 0} = invoke(["--json", "pointer", "resolve", pointer])
+      assert Jason.decode!(stdout) == %{"url" => url}
+    end
+  end
+
+  test "pointer resolve requires an explicit pointer and does not use wallet defaults" do
+    System.put_env("WALLET_ADDRESS", "$wallet.example/alice")
+
+    for arguments <- [[], [""]] do
+      assert_argument_error(
+        ["pointer", "resolve"] ++ arguments,
+        "Supply a payment pointer, quoted with single quotes."
+      )
+    end
+  end
+
+  test "pointer resolve reports SDK validation failures without echoing input" do
+    for pointer <- [
+          "wallet.example/alice",
+          "https://wallet.example/alice",
+          "$wallet.example:443/alice",
+          "$user:sensitive-value@wallet.example/alice",
+          "$wallet.example/alice?sensitive-value",
+          "$wallet.example/alice#sensitive-value",
+          "$wallet.example/%ZZ"
+        ],
+        options <- [[], ["--json"]] do
+      assert_argument_error(
+        ["pointer", "resolve", pointer] ++ options,
+        "Invalid payment pointer. Quote '$host[/path]' with single quotes."
+      )
+    end
+  end
+
+  test "pointer resolve help and strict option scope retain offline behavior" do
+    assert {stdout, "", 0} = invoke(["pointer", "resolve", "--help"])
+    assert stdout =~ "pointer resolve <pointer>"
+
+    for arguments <- [
+          ["pointer", "resolve", "$wallet.example", "extra"],
+          ["pointer", "resolve", "$wallet.example", "--unknown"],
+          ["pointer", "resolve", "$wallet.example", "--json=invalid"]
+        ] do
+      assert {"", _stderr, 2} = invoke(arguments)
+    end
+
+    assert_argument_error(
+      ["pointer", "resolve", "$wallet.example", "--allow-http"],
+      "The --allow-http option requires a resource command."
+    )
+
+    assert_argument_error(
+      ["pointer", "resolve", "$wallet.example", "--key-id", "id"],
+      "Signing-key options require keys validate or keys public."
+    )
+
+    assert_argument_error(
+      ["pointer", "resolve", "$wallet.example", "--jwks"],
+      "The --jwks option requires keys public."
+    )
+
+    assert_argument_error(
+      ["pointer", "resolve", "$wallet.example", "--version"],
       "The --version option cannot be combined with another command."
     )
   end

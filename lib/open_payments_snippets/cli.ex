@@ -6,7 +6,7 @@ defmodule OpenPaymentsSnippets.CLI do
   status. `main/1` is the escript entry point and terminates the VM with that status.
   """
 
-  alias OpenPayments.{Client, Error, IncomingPayment, WalletAddress}
+  alias OpenPayments.{Client, Error, IncomingPayment, PaymentPointer, WalletAddress}
   alias OpenPayments.Types.{JWKS, PublicIncomingPayment}
   alias OpenPaymentsSnippets.Commands.{Grants, Keys}
 
@@ -22,6 +22,7 @@ defmodule OpenPaymentsSnippets.CLI do
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
+    pointer resolve <pointer> Convert a quoted payment pointer to a URL offline
 
   Options:
     -h, --help          Show help
@@ -105,6 +106,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["keys", "public"]), do: {:ok, {:keys, :public}}
   defp command(["grant", "validate"]), do: {:ok, {:grant, :validate, nil}}
   defp command(["grant", "validate", source]), do: {:ok, {:grant, :validate, source}}
+  defp command(["pointer", "resolve"]), do: {:ok, {:pointer, :resolve, nil}}
+  defp command(["pointer", "resolve", pointer]), do: {:ok, {:pointer, :resolve, pointer}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
 
   defp resource_command?({group, _operation, _target}) when group in [:wallet, :incoming],
@@ -157,6 +160,22 @@ defmodule OpenPaymentsSnippets.CLI do
 
       {:error, message} ->
         argument_error(message)
+    end
+  end
+
+  defp execute({:pointer, :resolve, pointer}, _options) when pointer in [nil, ""] do
+    argument_error("Supply a payment pointer, quoted with single quotes.")
+  end
+
+  defp execute({:pointer, :resolve, pointer}, options) do
+    case PaymentPointer.to_url(pointer) do
+      {:ok, url} ->
+        output = if Keyword.get(options, :json, false), do: Jason.encode!(%{url: url}), else: url
+        IO.puts(output)
+        0
+
+      {:error, %Error{}} ->
+        argument_error("Invalid payment pointer. Quote '$host[/path]' with single quotes.")
     end
   end
 

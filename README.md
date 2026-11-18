@@ -81,6 +81,8 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments keys public --jwks` | Export a public JWKS containing that key |
 | `open-payments grant validate <file>` | Validate a complete grant-request JSON file offline |
 | `open-payments grant validate - --json` | Validate grant-request JSON from stdin and return a summary |
+| `open-payments pointer resolve <pointer>` | Convert a quoted payment pointer to a URL offline |
+| `open-payments pointer resolve <pointer> --json` | Return the resolved URL in a JSON `url` field |
 
 Version JSON keys are `cli_version`, `sdk_version`, `specification_version`, and
 `specification_revision`. The SDK supplies the specification metadata. Wallet
@@ -91,11 +93,28 @@ Key-set JSON contains a `keys` array of public JWK objects using the SDK's
 encoders. Empty sets and duplicate key IDs retain the SDK's supported behavior.
 
 Options accept standard boolean values and negation. `--json` applies to version,
-wallet, incoming-payment, key-command, and grant-validation results. Unknown commands, extra arguments, conflicting help/version requests,
+wallet, incoming-payment, key-command, grant-validation, and pointer results. Unknown commands, extra arguments, conflicting help/version requests,
 and unknown or invalid options produce diagnostics. See the [OptionParser documentation](https://elixir.hexdocs.pm/OptionParser.html).
 
 Results go to stdout. Diagnostics go to stderr. Exit statuses are 0 for success,
 1 for operation/runtime failures, and 2 for argument/configuration errors.
+
+## Payment-pointer conversion
+
+Resolve a payment pointer through the SDK's pure conversion helper.
+
+```sh
+./open-payments pointer resolve '$wallet.example'
+./open-payments pointer resolve '$wallet.example/alice' --json
+```
+
+The pointer argument is required. Keep the single quotes around `$...` so your
+shell preserves it. Root pointers resolve to `https://wallet.example/.well-known/pay`.
+Other paths retain the SDK's spelling and percent encoding.
+
+Default output is the resolved URL followed by a newline. JSON output contains
+a `url` field. Missing or invalid pointers return status 2 with safe diagnostics
+on stderr. This conversion runs offline and requires no environment settings.
 
 ## Wallet discovery
 
