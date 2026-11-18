@@ -81,6 +81,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments incoming complete <url>` | Mark an incoming payment complete using one signed POST |
 | `open-payments incoming list [address]` | Discover a wallet and fetch one signed page of incoming payments |
 | `open-payments quote get <url>` | Fetch quote details using one signed resource-token request |
+| `open-payments outgoing get <url>` | Fetch outgoing-payment details using one signed resource-token request |
 | `open-payments quote create <file\|->` | Discover the sending wallet's resource server and submit one signed quote request |
 | `open-payments keys validate` | Validate an existing Ed25519 signing key offline |
 | `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
@@ -403,6 +404,38 @@ added. Nested `sharedSecret` fields in amount extensions are redacted.
 Missing/invalid URL, credentials or token files return status 2. HTTP, transport,
 signing and invalid-response errors return status 1 with safe diagnostics,
 omitting request tokens, private keys, file paths and server error bodies.
+
+## Outgoing-payment reads
+
+Fetch an existing outgoing payment using its full resource URL and an issued
+resource access token granting outgoing-payment `read` permission:
+
+```sh
+./open-payments outgoing get 'https://payments.example/tenant/outgoing-payments/id' \
+  --access-token-file '/absolute/private/directory/outgoing-token.txt'
+./open-payments outgoing get 'https://payments.example/tenant/outgoing-payments/id' --json
+```
+
+The second example uses exported `ACCESS_TOKEN`. Signing settings and file-token
+precedence match quote reads: `WALLET_ADDRESS`, `KEY_ID` and one private-key source,
+with `--wallet-address`, `--key-id` and `--key-file` overrides. Tokens are never
+accepted as literal command-line arguments. The target URL is required; the
+configured wallet supplies the signing identity, without replacing that URL.
+
+The SDK signs one bodyless GET to the exact opaque path and query, with no wallet,
+quote or receiver discovery. HTTPS is required unless local HTTP is explicitly
+enabled with `--allow-http`. No redirect, retry, polling or payment creation occurs.
+
+Default output is formatted JSON; `--json` produces compact JSON with SDK field
+names. All three required amounts, decimal spellings, timestamps, optional
+`quoteId`/`failed` fields and metadata are preserved. Nested `sharedSecret` values
+in amount extensions and metadata are redacted. The SDK validates debit/sent
+asset consistency, sent value against debit, and its failed/value-string rule.
+The CLI adds no completion, fee, exchange-rate or related-resource inference.
+
+Missing/invalid URL, signing configuration or token sources return status 2.
+HTTP, transport, signing and invalid-response failures return 1 with safe
+diagnostics and no partial output. Tokens, key paths and server bodies are omitted.
 
 ## Quote creation
 
