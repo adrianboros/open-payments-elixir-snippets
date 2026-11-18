@@ -80,6 +80,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments incoming create <file\|->` | Discover the receiving wallet's resource server and submit one signed creation request |
 | `open-payments incoming complete <url>` | Mark an incoming payment complete using one signed POST |
 | `open-payments incoming list [address]` | Discover a wallet and fetch one signed page of incoming payments |
+| `open-payments quote get <url>` | Fetch quote details using one signed resource-token request |
 | `open-payments keys validate` | Validate an existing Ed25519 signing key offline |
 | `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
 | `open-payments keys public` | Export the configured key's public JWK as formatted JSON |
@@ -99,7 +100,7 @@ Key-set JSON contains a `keys` array of public JWK objects using the SDK's
 encoders. Empty sets and duplicate key IDs retain the SDK's supported behavior.
 
 Options accept standard boolean values and negation. `--json` applies to version,
-wallet, incoming-payment, key-command, grant, and pointer results. Unknown commands, extra arguments, conflicting help/version requests,
+wallet, incoming-payment, quote, key-command, grant, and pointer results. Unknown commands, extra arguments, conflicting help/version requests,
 and unknown or invalid options produce diagnostics. See the [OptionParser documentation](https://elixir.hexdocs.pm/OptionParser.html).
 
 Results go to stdout. Diagnostics go to stderr. Exit statuses are 0 for success,
@@ -362,6 +363,42 @@ commands. Input/configuration/pagination errors return status 2; HTTP, transport
 signing and invalid-response failures return 1 with safe diagnostics. Redirects
 and automatic retries remain disabled.
 
+## Quote reads
+
+Fetch an existing quote with its full resource URL and an issued resource access
+token granting quote `read` permission.
+
+```sh
+./open-payments quote get 'https://payments.example/tenant/quotes/id' \
+  --access-token-file '/absolute/private/directory/quote-token.txt'
+./open-payments quote get 'https://payments.example/tenant/quotes/id' \
+  --access-token-file '/absolute/private/directory/quote-token.txt' --json
+```
+
+Use `WALLET_ADDRESS`, `KEY_ID` and one explicit private-key source for the signing
+identity. `--wallet-address`, `--key-id` and `--key-file` override their defaults.
+`ACCESS_TOKEN` and `--access-token-file` follow the same precedence, raw file
+format and single-line-ending rules as authenticated incoming commands.
+Supply a resource token for this operation; continuation and token-management
+credentials serve other operations. Token values are not accepted as flags.
+
+The quote URL is required. The command performs one signed GET with no body or
+wallet/receiver discovery, preserving the URL's opaque path, query and supported
+port. The configured wallet supplies the signing identity. HTTPS is required
+unless `--allow-http` is provided for local development. Redirects and automatic
+retries are disabled.
+
+The SDK validates the quote response and both required amounts. Default output
+is formatted JSON and `--json` produces compact JSON using SDK field names,
+including `debitAmount` and `receiveAmount`. Different assets are supported.
+Decimal spelling, timestamps, wallet/receiver references and optional expiry
+string data are preserved. No local fee, exchange-rate or expiry inference is
+added. Nested `sharedSecret` fields in amount extensions are redacted.
+
+Missing/invalid URL, credentials or token files return status 2. HTTP, transport,
+signing and invalid-response errors return status 1 with safe diagnostics,
+omitting request tokens, private keys, file paths and server error bodies.
+
 ## Signing-key validation
 
 Validate an existing unencrypted Ed25519 PKCS#8 PEM key using its file path and
@@ -383,8 +420,8 @@ or `PRIVATE_KEY_BASE64`.
 count as unset. If both environment key sources are populated, the command
 returns a configuration error. `--key-file` selects a file for the current
 invocation and takes precedence over the environment key sources. `--key-id`
-takes precedence over `KEY_ID`. These flags apply to `keys validate`, `keys public`,
-`grant request`, `incoming get`, `incoming create`, `incoming complete`, and `incoming list`.
+takes precedence over `KEY_ID`. These flags apply to key commands and authenticated
+requests.
 
 The SDK performs key import and validation. Success returns status 0 and shows
 the key ID. JSON output contains `valid: true` and `key_id`. Missing or invalid
@@ -494,6 +531,6 @@ mix compile --warnings-as-errors
 ```
 
 After fetching dependencies, the test suite runs offline and uses a local HTTP
-server for wallet, public/authenticated incoming-payment and signed grant tests. `OpenPaymentsSnippets.CLI.run/1` returns
+server for wallet, incoming-payment, quote and grant integration tests. `OpenPaymentsSnippets.CLI.run/1` returns
 the exit status for callers and tests. The executable entry point `main/1`
 terminates the VM with that status.
