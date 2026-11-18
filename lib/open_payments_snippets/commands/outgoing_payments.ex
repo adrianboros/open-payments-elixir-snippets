@@ -5,6 +5,7 @@ defmodule OpenPaymentsSnippets.Commands.OutgoingPayments do
 
   alias OpenPayments.Types.{
     CreateOutgoingPayment,
+    OutgoingPaymentGrantSpentAmounts,
     OutgoingPaymentPaginationResult,
     OutgoingPaymentWithSpentAmounts
   }
@@ -18,6 +19,16 @@ defmodule OpenPaymentsSnippets.Commands.OutgoingPayments do
     with {:ok, token} <- Config.access_token(options),
          {:ok, client, _key} <- Config.authenticated_client(options) do
       OutgoingPayment.get(client, url, access_token: token)
+    end
+  end
+
+  @spec grant_spent_amounts(String.t() | nil, keyword()) ::
+          {:ok, OutgoingPaymentGrantSpentAmounts.t()} | {:error, Error.t() | String.t()}
+  def grant_spent_amounts(address, options) do
+    with {:ok, token} <- Config.access_token(options),
+         {:ok, client, _key} <- Config.authenticated_client(options),
+         {:ok, wallet} <- WalletAddress.get(client, address || Client.wallet_address(client)) do
+      OutgoingPayment.get_grant_spent_amounts(client, wallet.resource_server, access_token: token)
     end
   end
 

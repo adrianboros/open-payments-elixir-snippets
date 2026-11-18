@@ -12,6 +12,7 @@ defmodule OpenPaymentsSnippets.CLI do
     IncomingPaymentPaginationResult,
     IncomingPaymentWithMethods,
     JWKS,
+    OutgoingPaymentGrantSpentAmounts,
     OutgoingPaymentPaginationResult,
     OutgoingPaymentWithSpentAmounts,
     PublicIncomingPayment
@@ -51,6 +52,7 @@ defmodule OpenPaymentsSnippets.CLI do
     outgoing get <url>   Fetch outgoing-payment details with a signed resource-token request
     outgoing create <file|-> Discover the sending wallet and create an outgoing payment
     outgoing list [address] Discover a wallet and fetch one signed page of outgoing payments
+    outgoing grant-spent-amounts [address] Read the resource token's current grant spent amounts
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
@@ -199,6 +201,13 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["outgoing", "create", source]), do: {:ok, {:outgoing, :create, source}}
   defp command(["outgoing", "list"]), do: {:ok, {:outgoing, :list, nil}}
   defp command(["outgoing", "list", address]), do: {:ok, {:outgoing, :list, address}}
+
+  defp command(["outgoing", "grant-spent-amounts"]),
+    do: {:ok, {:outgoing, :grant_spent_amounts, nil}}
+
+  defp command(["outgoing", "grant-spent-amounts", address]),
+    do: {:ok, {:outgoing, :grant_spent_amounts, address}}
+
   defp command(["keys", "validate"]), do: {:ok, {:keys, :validate}}
   defp command(["keys", "public"]), do: {:ok, {:keys, :public}}
   defp command(["grant", "validate"]), do: {:ok, {:grant, :validate, nil}}
@@ -246,7 +255,7 @@ defmodule OpenPaymentsSnippets.CLI do
   defp resource_token_command?({:quote, operation, _}) when operation in [:get, :create], do: true
 
   defp resource_token_command?({:outgoing, operation, _})
-       when operation in [:get, :create, :list],
+       when operation in [:get, :create, :list, :grant_spent_amounts],
        do: true
 
   defp resource_token_command?(_command), do: false
@@ -277,6 +286,9 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp execute({:outgoing, :list, address}, options),
     do: print_resource_result(OutgoingPayments.list(address, options), options)
+
+  defp execute({:outgoing, :grant_spent_amounts, address}, options),
+    do: print_resource_result(OutgoingPayments.grant_spent_amounts(address, options), options)
 
   defp execute({:incoming, :get, url}, options),
     do: get_resource(:get_authenticated, url, options)
@@ -562,6 +574,13 @@ defmodule OpenPaymentsSnippets.CLI do
     |> Jason.encode!(pretty: not json?)
   end
 
+  defp format_resource(%OutgoingPaymentGrantSpentAmounts{} = spent, json?) do
+    spent
+    |> OutgoingPaymentGrantSpentAmounts.to_map()
+    |> redact_shared_secrets()
+    |> Jason.encode!(pretty: not json?)
+  end
+
   defp format_resource(resource, true), do: Jason.encode!(resource)
   defp format_resource(%JWKS{} = keys, false), do: Jason.encode!(keys, pretty: true)
 
@@ -611,6 +630,10 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp resource_error(%Error{kind: :validation, operation: :list_outgoing_payments}) do
     "Invalid pagination, resource-server URL, or resource access token. Choose either --first or --last (1-100), with an optional nonempty --cursor."
+  end
+
+  defp resource_error(%Error{kind: :validation, operation: :get_outgoing_payment_grant}) do
+    "Invalid resource-server URL or resource access token. Use a wallet with an HTTPS resource server; local HTTP requires --allow-http."
   end
 
   defp resource_error(%Error{kind: :validation, operation: :get_quote}) do
@@ -697,6 +720,9 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp resource_label(%Error{operation: :list_outgoing_payments}),
     do: "Outgoing-payment listing"
+
+  defp resource_label(%Error{operation: :get_outgoing_payment_grant}),
+    do: "Outgoing grant-spent read"
 
   defp resource_label(%Error{operation: :get_quote}), do: "Quote read"
   defp resource_label(%Error{operation: :create_quote}), do: "Quote creation"

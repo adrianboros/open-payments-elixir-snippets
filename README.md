@@ -84,6 +84,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments outgoing get <url>` | Fetch outgoing-payment details using one signed resource-token request |
 | `open-payments outgoing create <file\|->` | Discover the sending wallet's resource server and submit one signed payment request |
 | `open-payments outgoing list [address]` | Discover a wallet and fetch one signed page of outgoing payments |
+| `open-payments outgoing grant-spent-amounts [address]` | Discover a resource server and read the presented token's current grant spent amounts |
 | `open-payments quote create <file\|->` | Discover the sending wallet's resource server and submit one signed quote request |
 | `open-payments keys validate` | Validate an existing Ed25519 signing key offline |
 | `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
@@ -531,6 +532,38 @@ Signing and resource-token settings follow outgoing reads. Invalid input,
 configuration or pagination returns 2; HTTP, transport, signing and response
 failures return 1 with safe diagnostics. There is no retry, redirect, automatic
 page traversal or related-resource lookup.
+
+## Outgoing grant spent amounts
+
+Read spent amounts for the grant associated with the current issued resource
+token. The optional wallet URL or quoted payment pointer selects the resource
+server to discover; it defaults to the configured signing wallet.
+
+```sh
+./open-payments outgoing grant-spent-amounts \
+  --access-token-file '/absolute/private/directory/outgoing-token.txt'
+./open-payments outgoing grant-spent-amounts '$wallet.example/sender' --json
+```
+
+The second example uses exported `ACCESS_TOKEN`. Signing and token-file settings
+follow outgoing reads. An explicit address selects discovery without changing
+the signing identity. After unsigned wallet discovery, the SDK appends
+`/outgoing-payment-grant` to its `resourceServer` and signs one bodyless GET.
+There is no wallet filter, grant ID, payment lookup or pagination. The server
+selects the grant and current recurring interval from the presented token.
+Resource-server tenant paths and trailing slashes are preserved; base queries are
+rejected. Local HTTP requires `--allow-http`.
+
+Default output is formatted JSON; `--json` produces compact SDK JSON. Both
+`spentDebitAmount` and `spentReceiveAmount` remain present, each as an amount or
+explicit `null`. Decimal spelling, asset data and permitted extensions are
+preserved, with nested `sharedSecret` fields redacted. Null is not converted to
+zero, and the CLI infers no remaining budget, grant status or interval boundary.
+
+Invalid input/configuration returns 2; HTTP, transport, signing or invalid-response
+failures return 1 without partial output or sensitive diagnostics. Pagination,
+callback and output-file flags are rejected. No retry, redirect, polling or
+related-resource request occurs.
 
 ## Quote creation
 
