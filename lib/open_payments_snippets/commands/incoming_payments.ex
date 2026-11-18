@@ -1,9 +1,9 @@
 defmodule OpenPaymentsSnippets.Commands.IncomingPayments do
   @moduledoc false
 
-  alias OpenPayments.{Error, IncomingPayment}
-  alias OpenPayments.Types.IncomingPaymentWithMethods
-  alias OpenPaymentsSnippets.Config
+  alias OpenPayments.{Error, IncomingPayment, WalletAddress}
+  alias OpenPayments.Types.{CreateIncomingPayment, IncomingPaymentWithMethods}
+  alias OpenPaymentsSnippets.{Config, Input}
 
   @spec get(String.t(), keyword()) ::
           {:ok, IncomingPaymentWithMethods.t()} | {:error, Error.t() | String.t()}
@@ -11,6 +11,24 @@ defmodule OpenPaymentsSnippets.Commands.IncomingPayments do
     with {:ok, token} <- access_token(options),
          {:ok, client, _key} <- Config.authenticated_client(options) do
       IncomingPayment.get(client, url, access_token: token)
+    end
+  end
+
+  @spec create(String.t() | nil, keyword()) ::
+          {:ok, IncomingPaymentWithMethods.t()} | {:error, Error.t() | String.t()}
+  def create(source, options) do
+    with {:ok, data} <- Input.json(source, "incoming-payment request"),
+         {:ok, request} <- CreateIncomingPayment.from_map(data),
+         {:ok, token} <- access_token(options),
+         {:ok, client, _key} <- Config.authenticated_client(options),
+         {:ok, wallet} <- WalletAddress.get(client, request.wallet_address) do
+      IncomingPayment.create(client, wallet.resource_server, request, access_token: token)
+    else
+      {:error, %Error{operation: nil} = error} ->
+        {:error, %{error | operation: :create_incoming_payment}}
+
+      {:error, error} ->
+        {:error, error}
     end
   end
 

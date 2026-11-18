@@ -756,7 +756,7 @@ defmodule OpenPaymentsSnippets.CLITest do
         ] do
       assert_argument_error(
         arguments,
-        "Signing-key options require keys validate, keys public, grant request, or incoming get."
+        "Signing-key options require keys validate, keys public, grant request, incoming get, or incoming create."
       )
     end
 
@@ -1033,7 +1033,7 @@ defmodule OpenPaymentsSnippets.CLITest do
 
     assert_argument_error(
       ["grant", "validate", "file", "--key-id", "id"],
-      "Signing-key options require keys validate, keys public, grant request, or incoming get."
+      "Signing-key options require keys validate, keys public, grant request, incoming get, or incoming create."
     )
 
     assert_argument_error(
@@ -1112,7 +1112,7 @@ defmodule OpenPaymentsSnippets.CLITest do
 
     assert_argument_error(
       ["pointer", "resolve", "$wallet.example", "--key-id", "id"],
-      "Signing-key options require keys validate, keys public, grant request, or incoming get."
+      "Signing-key options require keys validate, keys public, grant request, incoming get, or incoming create."
     )
 
     assert_argument_error(

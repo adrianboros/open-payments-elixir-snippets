@@ -20,6 +20,7 @@ defmodule OpenPaymentsSnippets.CLI do
     wallet keys [address] Fetch the wallet's public JSON Web Key Set
     incoming get-public <url> Fetch public incoming-payment details
     incoming get <url>   Fetch incoming-payment details with a signed resource-token request
+    incoming create <file|-> Discover the receiving wallet and create an incoming payment
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
@@ -35,7 +36,7 @@ defmodule OpenPaymentsSnippets.CLI do
     --key-file <path>   Select a PEM file for key commands or authenticated requests
     --jwks              Export a key set with keys public
     --wallet-address <address> Override WALLET_ADDRESS for authenticated requests
-    --access-token-file <path> Read a resource token for incoming get, overriding ACCESS_TOKEN
+    --access-token-file <path> Read a resource token for incoming get/create, overriding ACCESS_TOKEN
     --output <path>     Save grant request state and secrets to a new private file
 
   Wallet address defaults to the WALLET_ADDRESS environment variable.
@@ -85,7 +86,7 @@ defmodule OpenPaymentsSnippets.CLI do
         (Keyword.has_key?(options, :key_id) || Keyword.has_key?(options, :key_file)) &&
             not signing_command?(command) ->
           argument_error(
-            "Signing-key options require keys validate, keys public, grant request, or incoming get."
+            "Signing-key options require keys validate, keys public, grant request, incoming get, or incoming create."
           )
 
         Keyword.has_key?(options, :output) &&
@@ -93,10 +94,14 @@ defmodule OpenPaymentsSnippets.CLI do
           argument_error("The --output option requires grant request.")
 
         Keyword.has_key?(options, :wallet_address) && not authenticated_command?(command) ->
-          argument_error("The --wallet-address option requires grant request or incoming get.")
+          argument_error(
+            "The --wallet-address option requires grant request, incoming get, or incoming create."
+          )
 
-        Keyword.has_key?(options, :access_token_file) && not match?({:incoming, :get, _}, command) ->
-          argument_error("The --access-token-file option requires incoming get.")
+        Keyword.has_key?(options, :access_token_file) && not resource_token_command?(command) ->
+          argument_error(
+            "The --access-token-file option requires incoming get or incoming create."
+          )
 
         Keyword.has_key?(options, :jwks) && command != {:keys, :public} ->
           argument_error("The --jwks option requires keys public.")
@@ -124,6 +129,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["incoming", "get-public", url]), do: {:ok, {:incoming, :get_public, url}}
   defp command(["incoming", "get"]), do: {:ok, {:incoming, :get, nil}}
   defp command(["incoming", "get", url]), do: {:ok, {:incoming, :get, url}}
+  defp command(["incoming", "create"]), do: {:ok, {:incoming, :create, nil}}
+  defp command(["incoming", "create", source]), do: {:ok, {:incoming, :create, source}}
   defp command(["keys", "validate"]), do: {:ok, {:keys, :validate}}
   defp command(["keys", "public"]), do: {:ok, {:keys, :public}}
   defp command(["grant", "validate"]), do: {:ok, {:grant, :validate, nil}}
@@ -144,8 +151,12 @@ defmodule OpenPaymentsSnippets.CLI do
   defp signing_command?(command), do: authenticated_command?(command)
 
   defp authenticated_command?({:grant, :request, _}), do: true
-  defp authenticated_command?({:incoming, :get, _}), do: true
-  defp authenticated_command?(_command), do: false
+  defp authenticated_command?(command), do: resource_token_command?(command)
+
+  defp resource_token_command?({:incoming, operation, _}) when operation in [:get, :create],
+    do: true
+
+  defp resource_token_command?(_command), do: false
 
   defp execute(:default, options) do
     command = if options[:version], do: :version, else: :help
@@ -164,6 +175,9 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp execute({:incoming, :get, url}, options),
     do: get_resource(:get_authenticated, url, options)
+
+  defp execute({:incoming, :create, source}, options),
+    do: print_resource_result(IncomingPayments.create(source, options), options)
 
   defp execute({:keys, operation}, options) do
     outcome =
@@ -284,7 +298,11 @@ defmodule OpenPaymentsSnippets.CLI do
   end
 
   defp get_resource(operation, address, options) do
-    case fetch_resource(operation, address, options) do
+    print_resource_result(fetch_resource(operation, address, options), options)
+  end
+
+  defp print_resource_result(result, options) do
+    case result do
       {:ok, resource} ->
         IO.puts(format_resource(resource, Keyword.get(options, :json, false)))
         0
@@ -363,6 +381,10 @@ defmodule OpenPaymentsSnippets.CLI do
     "Invalid incoming-payment URL or resource access token. Use a full HTTPS resource URL; local HTTP requires --allow-http."
   end
 
+  defp resource_error(%Error{kind: :validation, operation: :create_incoming_payment}) do
+    "Invalid incoming-payment request, resource-server URL, or resource access token."
+  end
+
   defp resource_error(%Error{kind: :validation}) do
     "Invalid wallet address. Use an HTTPS URL or payment pointer; local HTTP requires --allow-http."
   end
@@ -372,6 +394,14 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp resource_error(%Error{kind: :http, status: status} = error),
     do: "#{resource_label(error)} failed (HTTP #{status})."
+
+  defp resource_error(%Error{kind: :transport, operation: :create_incoming_payment}),
+    do:
+      "Incoming-payment creation failed due to a transport error. No automatic retry was made; the payment may have been created."
+
+  defp resource_error(%Error{kind: :decoding, operation: :create_incoming_payment}),
+    do:
+      "Incoming-payment creation returned an invalid response. No automatic retry was made; the payment may have been created."
 
   defp resource_error(%Error{kind: :transport} = error),
     do: "#{resource_label(error)} failed due to a transport error."
@@ -386,6 +416,9 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp resource_label(%Error{operation: :get_incoming_payment}),
     do: "Authenticated incoming-payment read"
+
+  defp resource_label(%Error{operation: :create_incoming_payment}),
+    do: "Incoming-payment creation"
 
   defp resource_label(_error), do: "Wallet discovery"
 

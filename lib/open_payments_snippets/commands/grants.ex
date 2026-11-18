@@ -3,7 +3,7 @@ defmodule OpenPaymentsSnippets.Commands.Grants do
 
   alias OpenPayments.{Client, Error, Grant, Key, WalletAddress}
   alias OpenPayments.Types.{GrantRequest, GrantResponse}
-  alias OpenPaymentsSnippets.Config
+  alias OpenPaymentsSnippets.{Config, Input}
 
   @spec validate(String.t() | nil) :: {:ok, %{valid: true}} | {:error, String.t()}
   def validate(source) do
@@ -128,8 +128,7 @@ defmodule OpenPaymentsSnippets.Commands.Grants do
     do: {:error, {:operation, "Grant request failed while signing the request."}}
 
   defp read_request(source) do
-    with {:ok, json} <- read(source),
-         {:ok, data} <- decode(json),
+    with {:ok, data} <- Input.json(source, "grant request"),
          {:ok, request} <- GrantRequest.from_map(data) do
       {:ok, request}
     else
@@ -141,31 +140,6 @@ defmodule OpenPaymentsSnippets.Commands.Grants do
 
       {:error, message} ->
         {:error, message}
-    end
-  end
-
-  defp read(source) when source in [nil, ""],
-    do: {:error, "Supply a JSON file or - for stdin."}
-
-  defp read("-") do
-    case IO.read(:stdio, :eof) do
-      {:error, _reason} -> {:error, "Unable to read grant request from stdin."}
-      :eof -> {:ok, ""}
-      data -> {:ok, data}
-    end
-  end
-
-  defp read(path) do
-    case File.read(path) do
-      {:ok, data} -> {:ok, data}
-      {:error, _reason} -> {:error, "Unable to read grant request file."}
-    end
-  end
-
-  defp decode(json) do
-    case Jason.decode(json) do
-      {:ok, data} -> {:ok, data}
-      {:error, _error} -> {:error, "Grant request must contain valid JSON."}
     end
   end
 end

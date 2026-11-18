@@ -77,6 +77,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments incoming get-public <url> --json` | Public incoming-payment details as compact JSON |
 | `open-payments incoming get <url>` | Fetch authenticated incoming-payment details with a signed resource-token request |
 | `open-payments incoming get <url> --access-token-file <path> --json` | Read a resource token from a file and display redacted compact JSON |
+| `open-payments incoming create <file\|->` | Discover the receiving wallet's resource server and submit one signed creation request |
 | `open-payments keys validate` | Validate an existing Ed25519 signing key offline |
 | `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
 | `open-payments keys public` | Export the configured key's public JWK as formatted JSON |
@@ -232,6 +233,60 @@ decimal amount strings and timestamp spelling. Request tokens, private keys,
 file paths and server error bodies stay out of diagnostics. Missing or invalid
 inputs return status 2; HTTP, transport, signing and response failures return 1.
 
+## Incoming-payment creation
+
+Create a receiving-payment resource with `incoming create`. Supply a JSON file
+or `-` for stdin, your signing settings, and an issued resource access token with
+incoming-payment `create` permission for the receiving wallet's resource server.
+
+```json
+{
+  "walletAddress": "https://wallet.example/receiver",
+  "incomingAmount": {"value": "1000", "assetCode": "USD", "assetScale": 2},
+  "metadata": {"description": "Example payment"}
+}
+```
+
+Only `walletAddress` is required. `incomingAmount`, `expiresAt` (an RFC 3339
+timestamp) and JSON-object `metadata` are optional. The SDK validates the schema;
+explicit nulls and unknown top-level fields are rejected. Amount values are
+decimal strings. Use assets supported by the receiving wallet; the server
+enforces compatibility and grant permissions.
+
+```sh
+./open-payments incoming create '/absolute/path/to/incoming-request.json' \
+  --access-token-file '/absolute/private/directory/create-token.txt'
+cat '/absolute/path/to/incoming-request.json' | ./open-payments incoming create - \
+  --access-token-file '/absolute/private/directory/create-token.txt' --json
+```
+
+`ACCESS_TOKEN` and `--access-token-file` follow the same precedence and file-format
+rules as authenticated reads. Use a resource token with creation permission;
+continuation and token-management credentials belong to other operations.
+`WALLET_ADDRESS`, `KEY_ID` and one private-key source identify the signing client,
+with `--wallet-address`, `--key-id` and `--key-file` overrides available.
+
+The explicit payload `walletAddress` selects the **receiving wallet** and must
+be a full wallet URL. It can differ from the configured signing wallet. The
+command validates the JSON and client configuration, discovers the receiving
+wallet using an unsigned GET, then delegates a signed POST to the SDK using its
+returned `resourceServer`. The SDK appends `/incoming-payments`, preserving tenant
+paths and an existing trailing slash. A resource-server base URL containing a
+query is rejected. Local HTTP requires `--allow-http` for both requests.
+The payload wallet, amount, expiry and metadata are sent as supplied.
+
+HTTP 201 returns the new payment's details with ILP `sharedSecret` fields
+recursively redacted. Default output is formatted JSON; `--json` produces compact
+JSON. The SDK validates the response, including completed false, zero received
+funds, required methods and consistent assets. Results retain the SDK's field
+names, amount strings, timestamps and other supported data.
+
+Missing/invalid input or configuration returns status 2. Discovery, HTTP, signing,
+transport and invalid-response failures return status 1 with safe diagnostics.
+No automatic retry, redirect or follow-up read occurs. A transport or invalid
+response failure after the POST can leave a payment created on the server;
+review the outcome before manually submitting another creation request.
+
 ## Signing-key validation
 
 Validate an existing unencrypted Ed25519 PKCS#8 PEM key using its file path and
@@ -254,7 +309,7 @@ count as unset. If both environment key sources are populated, the command
 returns a configuration error. `--key-file` selects a file for the current
 invocation and takes precedence over the environment key sources. `--key-id`
 takes precedence over `KEY_ID`. These flags apply to `keys validate`, `keys public`,
-`grant request`, and `incoming get`.
+`grant request`, `incoming get`, and `incoming create`.
 
 The SDK performs key import and validation. Success returns status 0 and shows
 the key ID. JSON output contains `valid: true` and `key_id`. Missing or invalid
