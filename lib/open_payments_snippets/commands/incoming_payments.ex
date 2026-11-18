@@ -3,6 +3,7 @@ defmodule OpenPaymentsSnippets.Commands.IncomingPayments do
 
   alias OpenPayments.{Error, IncomingPayment, WalletAddress}
   alias OpenPayments.Types.{CreateIncomingPayment, IncomingPaymentWithMethods}
+  alias OpenPayments.Types.IncomingPayment, as: IncomingPaymentData
   alias OpenPaymentsSnippets.{Config, Input}
 
   @spec get(String.t(), keyword()) ::
@@ -11,6 +12,15 @@ defmodule OpenPaymentsSnippets.Commands.IncomingPayments do
     with {:ok, token} <- access_token(options),
          {:ok, client, _key} <- Config.authenticated_client(options) do
       IncomingPayment.get(client, url, access_token: token)
+    end
+  end
+
+  @spec complete(String.t(), keyword()) ::
+          {:ok, IncomingPaymentData.t()} | {:error, Error.t() | String.t()}
+  def complete(url, options) do
+    with {:ok, token} <- access_token(options),
+         {:ok, client, _key} <- Config.authenticated_client(options) do
+      IncomingPayment.complete(client, url, access_token: token)
     end
   end
 

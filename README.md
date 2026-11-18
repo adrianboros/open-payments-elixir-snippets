@@ -78,6 +78,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments incoming get <url>` | Fetch authenticated incoming-payment details with a signed resource-token request |
 | `open-payments incoming get <url> --access-token-file <path> --json` | Read a resource token from a file and display redacted compact JSON |
 | `open-payments incoming create <file\|->` | Discover the receiving wallet's resource server and submit one signed creation request |
+| `open-payments incoming complete <url>` | Mark an incoming payment complete using one signed POST |
 | `open-payments keys validate` | Validate an existing Ed25519 signing key offline |
 | `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
 | `open-payments keys public` | Export the configured key's public JWK as formatted JSON |
@@ -287,6 +288,39 @@ No automatic retry, redirect or follow-up read occurs. A transport or invalid
 response failure after the POST can leave a payment created on the server;
 review the outcome before manually submitting another creation request.
 
+## Incoming-payment completion
+
+Mark an existing incoming payment complete using its full resource URL and a
+resource access token with incoming-payment `complete` permission.
+
+```sh
+./open-payments incoming complete 'https://payments.example/tenant/incoming-payments/id' \
+  --access-token-file '/absolute/private/directory/complete-token.txt'
+./open-payments incoming complete 'https://payments.example/tenant/incoming-payments/id' \
+  --access-token-file '/absolute/private/directory/complete-token.txt' --json
+```
+
+Signing settings, `ACCESS_TOKEN`, token-file precedence and key/wallet overrides
+follow the same rules as authenticated incoming reads. The resource URL is
+required; it is not inferred from `WALLET_ADDRESS`. The SDK appends `/complete`,
+preserving tenant/opaque paths and reusing a trailing slash. URLs with queries,
+including an empty `?`, are rejected. Local HTTP requires `--allow-http`.
+
+The command sends one signed POST with no request body or wallet discovery.
+HTTP 200 returns detailed payment JSON with `completed: true`. The SDK checks
+the completion response and asset consistency; the server decides eligibility
+and checks permissions. The CLI adds no requirement that the full incoming
+amount has already been received.
+
+Default output is formatted JSON and `--json` produces compact JSON. Amounts,
+timestamps and supported metadata use SDK wire mappings. Completion responses
+exclude payment methods; any nested `sharedSecret` fields are still redacted.
+Input/configuration failures return status 2 and operation failures return 1,
+with credentials, paths and server error bodies omitted from diagnostics.
+No retry, redirect or automatic readback occurs. A transport or invalid-response
+failure may follow successful completion on the server; review the outcome
+before manually repeating the command.
+
 ## Signing-key validation
 
 Validate an existing unencrypted Ed25519 PKCS#8 PEM key using its file path and
@@ -309,7 +343,7 @@ count as unset. If both environment key sources are populated, the command
 returns a configuration error. `--key-file` selects a file for the current
 invocation and takes precedence over the environment key sources. `--key-id`
 takes precedence over `KEY_ID`. These flags apply to `keys validate`, `keys public`,
-`grant request`, `incoming get`, and `incoming create`.
+`grant request`, `incoming get`, `incoming create`, and `incoming complete`.
 
 The SDK performs key import and validation. Success returns status 0 and shows
 the key ID. JSON output contains `valid: true` and `key_id`. Missing or invalid
