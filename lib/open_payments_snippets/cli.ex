@@ -17,7 +17,15 @@ defmodule OpenPaymentsSnippets.CLI do
 
   alias OpenPayments.Types.IncomingPayment, as: IncomingPaymentData
   alias OpenPayments.Types.Quote, as: QuoteData
-  alias OpenPaymentsSnippets.Commands.{GrantContinuation, Grants, IncomingPayments, Keys, Quotes}
+
+  alias OpenPaymentsSnippets.Commands.{
+    GrantCancellation,
+    GrantContinuation,
+    Grants,
+    IncomingPayments,
+    Keys,
+    Quotes
+  }
 
   @help """
   Usage: open-payments [command] [options]
@@ -39,6 +47,7 @@ defmodule OpenPaymentsSnippets.CLI do
     grant validate <file|-> Validate grant-request JSON offline
     grant request <file|-> Discover the auth server and request a signed grant
     grant continue <session> Continue a saved grant once and update its private session
+    grant cancel <session> Cancel a saved grant and mark its private session cancelled
     pointer resolve <pointer> Convert a quoted payment pointer to a URL offline
 
   Options:
@@ -181,6 +190,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["grant", "request", source]), do: {:ok, {:grant, :request, source}}
   defp command(["grant", "continue"]), do: {:ok, {:grant, :continue, nil}}
   defp command(["grant", "continue", session]), do: {:ok, {:grant, :continue, session}}
+  defp command(["grant", "cancel"]), do: {:ok, {:grant, :cancel, nil}}
+  defp command(["grant", "cancel", session]), do: {:ok, {:grant, :cancel, session}}
   defp command(["pointer", "resolve"]), do: {:ok, {:pointer, :resolve, nil}}
   defp command(["pointer", "resolve", pointer]), do: {:ok, {:pointer, :resolve, pointer}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
@@ -188,14 +199,17 @@ defmodule OpenPaymentsSnippets.CLI do
   defp resource_command?({group, _operation, _target}) when group in [:wallet, :incoming, :quote],
     do: true
 
-  defp resource_command?({:grant, operation, _}) when operation in [:request, :continue], do: true
+  defp resource_command?({:grant, operation, _}) when operation in [:request, :continue, :cancel],
+    do: true
+
   defp resource_command?(_command), do: false
 
   defp signing_command?({:keys, _}), do: true
   defp signing_command?(command), do: authenticated_command?(command)
 
-  defp authenticated_command?({:grant, operation, _}) when operation in [:request, :continue],
-    do: true
+  defp authenticated_command?({:grant, operation, _})
+       when operation in [:request, :continue, :cancel],
+       do: true
 
   defp authenticated_command?(command), do: resource_token_command?(command)
 
@@ -292,8 +306,14 @@ defmodule OpenPaymentsSnippets.CLI do
     end
   end
 
-  defp execute({:grant, :continue, session}, options) do
-    case GrantContinuation.run(session, options) do
+  defp execute({:grant, operation, session}, options) when operation in [:continue, :cancel] do
+    result =
+      case operation do
+        :continue -> GrantContinuation.run(session, options)
+        :cancel -> GrantCancellation.run(session, options)
+      end
+
+    case result do
       {:ok, result} ->
         output =
           cond do

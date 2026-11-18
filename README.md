@@ -90,6 +90,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments grant validate - --json` | Validate grant-request JSON from stdin and return a summary |
 | `open-payments grant request <file\|-> --output <path>` | Discover the authorization server, request a signed grant, and save private session state |
 | `open-payments grant continue <session>` | Continue once using saved continuation credentials and update the private session |
+| `open-payments grant cancel <session>` | Cancel using saved continuation credentials and mark the private session cancelled |
 | `open-payments pointer resolve <pointer>` | Convert a quoted payment pointer to a URL offline |
 | `open-payments pointer resolve <pointer> --json` | Return the resolved URL in a JSON `url` field |
 
@@ -566,7 +567,8 @@ output reports `Grant pending` or `Grant approved`; `--json` returns only
 keep tokens, response extensions and callback nonces out of stdout. For a pending
 redirect interaction, the consent link is at `response.interact.redirect` inside
 the saved file. Use `grant continue` to verify the returned callback and resume.
-Grant cancellation and token commands are subsequent increments.
+Use `grant cancel` to cancel the saved grant. Token management is a subsequent
+increment.
 
 Argument/configuration errors return status 2; HTTP, transport, response-decoding
 and session-file failures return status 1. Diagnostics omit payload values,
@@ -656,6 +658,42 @@ and successful results return 0, invalid input/configuration/callbacks return 2,
 and operation/locking/write failures return 1. A post-response save failure may
 lose the new credentials while retaining an in-flight marker; reconcile before
 another attempt.
+
+## Grant cancellation
+
+Cancel an initial or continued grant using its current private session and the
+same signing key used for initiation:
+
+```sh
+./open-payments grant cancel '/absolute/private/directory/grant-session.json'
+./open-payments grant cancel '/absolute/private/directory/another-session.json' --json
+```
+
+Wallet/key IDs default to the recorded identity, with matching explicit overrides
+and `--key-file` supported as for continuation. The command uses the latest saved
+continuation URI and credential. `ACCESS_TOKEN` is ignored; callback, resource
+token, pagination and output-file flags are rejected. Pending consent and
+`continue.wait` do not delay cancellation, and no callback is required.
+
+The SDK sends one signed, bodyless DELETE to the exact continuation URI with no
+discovery, redirect, appended path or automatic retry. Local HTTP requires
+`--allow-http`. HTTP 204 confirms success; text reports `Grant cancelled`, while
+JSON returns `{"status":"cancelled","saved":true}`. The existing session is
+atomically replaced with an owner-only cancellation record containing identity,
+public JWK, original grant endpoint and cancellation time. Tokens, callback data,
+subject data and response extensions are removed from that file. Both continuation
+and repeat cancellation reject the cancelled record. The authorization server
+determines cancellation's effect on issued resource tokens; copies of credentials
+outside the session are not changed by this command.
+
+Cancellation shares continuation's single-link `0600` file requirement, exclusive
+lock, durable in-flight marker and atomic updates. HTTP/transport failures and
+unexpected success statuses mark the session uncertain and block further calls.
+If saving after HTTP 204 fails, the local record remains in-flight even though
+the grant may be cancelled. Reconcile the server outcome before repairing state
+or removing a stale lock. Diagnostics omit credentials and server bodies. Exit
+statuses are 0 for saved cancellation, 2 for invalid input/configuration, and 1 for
+operation, locking or write failures.
 
 ## Development
 

@@ -1,15 +1,15 @@
 defmodule OpenPaymentsSnippets.Commands.GrantContinuation do
   @moduledoc false
 
-  alias OpenPayments.{Client, Error, Grant, Key}
-  alias OpenPayments.Types.{GrantContinuationResponse, GrantResponse, JWK}
-  alias OpenPaymentsSnippets.{Config, GrantCallback, GrantSession}
+  alias OpenPayments.{Error, Grant, Key}
+  alias OpenPayments.Types.{GrantContinuationResponse, JWK}
+  alias OpenPaymentsSnippets.{GrantCallback, GrantSession}
 
   @spec run(String.t() | nil, keyword()) :: {:ok, map()} | {:error, term()}
   def run(path, options) do
     GrantSession.transaction(path, fn path, session ->
-      with {:ok, response, received} <- validate(session),
-           {:ok, client, key} <- client(session, options),
+      with {:ok, response, received} <- GrantSession.validate(session),
+           {:ok, client, key} <- GrantSession.client(session, options),
            :ok <- ready_time(response.continue.wait, received),
            {:ok, payload, verified?} <- GrantCallback.payload(session, response, options) do
         attempt(path, session, client, key, response.continue, payload, verified?)
@@ -18,55 +18,6 @@ defmodule OpenPaymentsSnippets.Commands.GrantContinuation do
         error -> error
       end
     end)
-  end
-
-  defp validate(session) do
-    with 1 <- session["version"],
-         true <- not Map.has_key?(session, "state") or session["state"] == "ready",
-         true <- is_binary(session["wallet_address"]) and is_binary(session["key_id"]),
-         true <- is_binary(session["grant_endpoint"]),
-         true <- is_binary(session["received_at"]),
-         true <-
-           not Map.has_key?(session, "callback_verified") or
-             is_boolean(session["callback_verified"]),
-         {:ok, received, _offset} <- DateTime.from_iso8601(session["received_at"]),
-         true <- DateTime.compare(received, DateTime.utc_now()) != :gt,
-         {:ok, response} <- decode_response(session) do
-      {:ok, response, received}
-    else
-      _ ->
-        invalid(
-          "Invalid or unavailable grant session. Check its version, state, identity and receipt time; reconcile any interrupted attempt."
-        )
-    end
-  end
-
-  defp decode_response(%{"kind" => "grant-request", "response" => data}),
-    do: GrantResponse.from_map(data)
-
-  defp decode_response(%{"kind" => "grant-continuation", "response" => data}),
-    do: GrantContinuationResponse.from_map(data)
-
-  defp decode_response(_session), do: {:error, :kind}
-
-  defp client(session, options) do
-    options =
-      options
-      |> Keyword.put_new(:wallet_address, session["wallet_address"])
-      |> Keyword.put_new(:key_id, session["key_id"])
-
-    with {:ok, client, key} <- Config.authenticated_client(options),
-         true <-
-           Client.wallet_address(client) == session["wallet_address"] and
-             Key.key_id(key) == session["key_id"],
-         true <-
-           is_nil(session["signing_jwk"]) or
-             session["signing_jwk"] == JWK.to_map(Key.public_jwk(key)) do
-      {:ok, client, key}
-    else
-      {:error, message} -> invalid(message)
-      _ -> invalid("Signing identity does not match the grant session.")
-    end
   end
 
   defp ready_time(wait, received) do

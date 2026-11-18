@@ -3,6 +3,10 @@ defmodule OpenPaymentsSnippets.GrantSession do
 
   import Bitwise
 
+  alias OpenPayments.{Client, Key}
+  alias OpenPayments.Types.{GrantContinuationResponse, GrantResponse, JWK}
+  alias OpenPaymentsSnippets.Config
+
   @spec transaction(String.t() | nil, function()) :: term()
   def transaction(path, _action) when path in [nil, ""],
     do: {:error, {:argument, "Supply a private grant-session file."}}
@@ -64,6 +68,57 @@ defmodule OpenPaymentsSnippets.GrantSession do
     end
   end
 
+  @spec validate(map()) :: {:ok, struct(), DateTime.t()} | {:error, term()}
+  def validate(session) do
+    with 1 <- session["version"],
+         true <- not Map.has_key?(session, "state") or session["state"] == "ready",
+         true <- is_binary(session["wallet_address"]) and is_binary(session["key_id"]),
+         true <- is_binary(session["grant_endpoint"]),
+         true <- is_binary(session["received_at"]),
+         true <-
+           not Map.has_key?(session, "callback_verified") or
+             is_boolean(session["callback_verified"]),
+         {:ok, received, _offset} <- DateTime.from_iso8601(session["received_at"]),
+         true <- DateTime.compare(received, DateTime.utc_now()) != :gt,
+         {:ok, response} <- decode_response(session) do
+      {:ok, response, received}
+    else
+      _ ->
+        invalid(
+          "Invalid or unavailable grant session. Check its version, state, identity and receipt time; reconcile any interrupted attempt."
+        )
+    end
+  end
+
+  @spec client(map(), keyword()) :: {:ok, Client.t(), Key.t()} | {:error, term()}
+  def client(session, options) do
+    options =
+      options
+      |> Keyword.put_new(:wallet_address, session["wallet_address"])
+      |> Keyword.put_new(:key_id, session["key_id"])
+
+    with {:ok, client, key} <- Config.authenticated_client(options),
+         true <-
+           Client.wallet_address(client) == session["wallet_address"] and
+             Key.key_id(key) == session["key_id"],
+         true <-
+           is_nil(session["signing_jwk"]) or
+             session["signing_jwk"] == JWK.to_map(Key.public_jwk(key)) do
+      {:ok, client, key}
+    else
+      {:error, message} -> invalid(message)
+      _ -> invalid("Signing identity does not match the grant session.")
+    end
+  end
+
+  defp decode_response(%{"kind" => "grant-request", "response" => data}),
+    do: GrantResponse.from_map(data)
+
+  defp decode_response(%{"kind" => "grant-continuation", "response" => data}),
+    do: GrantContinuationResponse.from_map(data)
+
+  defp decode_response(_session), do: {:error, :kind}
+
   defp load(path) do
     with {:ok, %{type: :regular, links: 1, mode: mode}} <- File.lstat(path),
          true <- (mode &&& 0o777) == 0o600,
@@ -84,6 +139,8 @@ defmodule OpenPaymentsSnippets.GrantSession do
       _ -> save_error()
     end
   end
+
+  defp invalid(message), do: {:error, {:argument, message}}
 
   defp save_error,
     do:
