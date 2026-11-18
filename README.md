@@ -82,6 +82,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments incoming list [address]` | Discover a wallet and fetch one signed page of incoming payments |
 | `open-payments quote get <url>` | Fetch quote details using one signed resource-token request |
 | `open-payments outgoing get <url>` | Fetch outgoing-payment details using one signed resource-token request |
+| `open-payments outgoing create <file\|->` | Discover the sending wallet's resource server and submit one signed payment request |
 | `open-payments quote create <file\|->` | Discover the sending wallet's resource server and submit one signed quote request |
 | `open-payments keys validate` | Validate an existing Ed25519 signing key offline |
 | `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
@@ -436,6 +437,61 @@ The CLI adds no completion, fee, exchange-rate or related-resource inference.
 Missing/invalid URL, signing configuration or token sources return status 2.
 HTTP, transport, signing and invalid-response failures return 1 with safe
 diagnostics and no partial output. Tokens, key paths and server bodies are omitted.
+
+## Outgoing-payment creation
+
+Create an outgoing payment from a complete JSON file or stdin with an issued
+resource token granting outgoing-payment `create` permission. Submitting this
+command authorizes the server to create and process the payment.
+
+```sh
+./open-payments outgoing create '/absolute/path/to/outgoing-request.json' \
+  --access-token-file '/absolute/private/directory/outgoing-token.txt'
+cat '/absolute/path/to/outgoing-request.json' | ./open-payments outgoing create - --json
+```
+
+Use either a quote-based payload:
+
+```json
+{
+  "walletAddress": "https://wallet.example/sender",
+  "quoteId": "https://payments.example/tenant/quotes/id",
+  "metadata": {"reference": "invoice-17"}
+}
+```
+
+Or supply the incoming-payment reference and debit amount directly:
+
+```json
+{
+  "walletAddress": "https://wallet.example/sender",
+  "incomingPayment": "https://receiver.example/tenant/incoming-payments/id",
+  "debitAmount": {"value": "100", "assetCode": "USD", "assetScale": 2}
+}
+```
+
+These forms are mutually exclusive. Metadata is optional; amounts use integer
+minor-unit strings. The SDK validates the complete payload before discovery.
+The CLI discovers the payload's sending wallet unsigned and uses its
+`resourceServer`; the SDK appends `/outgoing-payments` and sends one signed POST.
+Tenant paths and trailing slashes are preserved; collection bases with queries
+are rejected. No quote or receiver lookup, amount inference or follow-up send/read
+request occurs. Local HTTP requires `--allow-http`.
+
+Signing identity and token settings follow outgoing reads. An explicit
+`--wallet-address` changes the signing identity without rewriting the payload's
+wallet or selecting its resource server. Default output is formatted JSON;
+`--json` produces compact SDK JSON. The creation response can already show sent
+amounts or failure, and can contain either, both or neither of
+`grantSpentDebitAmount` and `grantSpentReceiveAmount`. These grant amounts remain
+separate from the payment's amounts. Metadata and permitted extensions are retained;
+all nested `sharedSecret` values are redacted.
+
+Input/configuration/schema errors return 2; operation failures return 1 without
+partial output, credentials, key paths or server bodies. Redirects and automatic
+retries are disabled. A lost or invalid response can follow successful creation
+or payment processing; reconcile that outcome before manually repeating the
+command, since repetition can create another payment.
 
 ## Quote creation
 

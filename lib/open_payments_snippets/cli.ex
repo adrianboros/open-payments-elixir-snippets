@@ -12,6 +12,7 @@ defmodule OpenPaymentsSnippets.CLI do
     IncomingPaymentPaginationResult,
     IncomingPaymentWithMethods,
     JWKS,
+    OutgoingPaymentWithSpentAmounts,
     PublicIncomingPayment
   }
 
@@ -47,6 +48,7 @@ defmodule OpenPaymentsSnippets.CLI do
     quote get <url>     Fetch quote details with a signed resource-token request
     quote create <file|-> Discover the sending wallet and create a quote
     outgoing get <url>   Fetch outgoing-payment details with a signed resource-token request
+    outgoing create <file|-> Discover the sending wallet and create an outgoing payment
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
@@ -191,6 +193,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["quote", "create", source]), do: {:ok, {:quote, :create, source}}
   defp command(["outgoing", "get"]), do: {:ok, {:outgoing, :get, nil}}
   defp command(["outgoing", "get", url]), do: {:ok, {:outgoing, :get, url}}
+  defp command(["outgoing", "create"]), do: {:ok, {:outgoing, :create, nil}}
+  defp command(["outgoing", "create", source]), do: {:ok, {:outgoing, :create, source}}
   defp command(["keys", "validate"]), do: {:ok, {:keys, :validate}}
   defp command(["keys", "public"]), do: {:ok, {:keys, :public}}
   defp command(["grant", "validate"]), do: {:ok, {:grant, :validate, nil}}
@@ -236,7 +240,9 @@ defmodule OpenPaymentsSnippets.CLI do
        do: true
 
   defp resource_token_command?({:quote, operation, _}) when operation in [:get, :create], do: true
-  defp resource_token_command?({:outgoing, :get, _}), do: true
+
+  defp resource_token_command?({:outgoing, operation, _}) when operation in [:get, :create],
+    do: true
 
   defp resource_token_command?(_command), do: false
 
@@ -257,6 +263,9 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp execute({:outgoing, :get, url}, options),
     do: get_resource(:get_outgoing, url, options)
+
+  defp execute({:outgoing, :create, source}, options),
+    do: print_resource_result(OutgoingPayments.create(source, options), options)
 
   defp execute({:incoming, :get, url}, options),
     do: get_resource(:get_authenticated, url, options)
@@ -528,6 +537,13 @@ defmodule OpenPaymentsSnippets.CLI do
     |> Jason.encode!(pretty: not json?)
   end
 
+  defp format_resource(%OutgoingPaymentWithSpentAmounts{} = payment, json?) do
+    payment
+    |> OutgoingPaymentWithSpentAmounts.to_map()
+    |> redact_shared_secrets()
+    |> Jason.encode!(pretty: not json?)
+  end
+
   defp format_resource(resource, true), do: Jason.encode!(resource)
   defp format_resource(%JWKS{} = keys, false), do: Jason.encode!(keys, pretty: true)
 
@@ -583,6 +599,10 @@ defmodule OpenPaymentsSnippets.CLI do
     "Invalid outgoing-payment URL or resource access token. Use a full HTTPS resource URL; local HTTP requires --allow-http."
   end
 
+  defp resource_error(%Error{kind: :validation, operation: :create_outgoing_payment}) do
+    "Invalid outgoing-payment request, resource-server URL, or resource access token."
+  end
+
   defp resource_error(%Error{kind: :validation, operation: :create_quote}) do
     "Invalid quote request, resource-server URL, or resource access token."
   end
@@ -596,6 +616,14 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp resource_error(%Error{kind: :http, status: status} = error),
     do: "#{resource_label(error)} failed (HTTP #{status})."
+
+  defp resource_error(%Error{kind: :transport, operation: :create_outgoing_payment}),
+    do:
+      "Outgoing-payment creation failed due to a transport error. No automatic retry was made; the payment may have been created or started."
+
+  defp resource_error(%Error{kind: :decoding, operation: :create_outgoing_payment}),
+    do:
+      "Outgoing-payment creation returned an invalid response. No automatic retry was made; the payment may have been created or started."
 
   defp resource_error(%Error{kind: :transport, operation: :create_quote}),
     do:
@@ -648,6 +676,9 @@ defmodule OpenPaymentsSnippets.CLI do
   defp resource_label(%Error{operation: :get_quote}), do: "Quote read"
   defp resource_label(%Error{operation: :create_quote}), do: "Quote creation"
   defp resource_label(%Error{operation: :get_outgoing_payment}), do: "Outgoing-payment read"
+
+  defp resource_label(%Error{operation: :create_outgoing_payment}),
+    do: "Outgoing-payment creation"
 
   defp resource_label(_error), do: "Wallet discovery"
 
