@@ -6,13 +6,13 @@ defmodule OpenPaymentsSnippets.Commands.Keys do
 
   @spec validate(keyword()) :: {:ok, %{valid: true, key_id: String.t()}} | {:error, String.t()}
   def validate(options) do
-    with {:ok, key} <- load_key(options),
+    with {:ok, key} <- load(options),
          do: {:ok, %{valid: true, key_id: Key.key_id(key)}}
   end
 
   @spec public(keyword()) :: {:ok, JWK.t() | JWKS.t()} | {:error, String.t()}
   def public(options) do
-    with {:ok, key} <- load_key(options) do
+    with {:ok, key} <- load(options) do
       public =
         if Keyword.get(options, :jwks, false), do: Key.public_jwks(key), else: Key.public_jwk(key)
 
@@ -20,7 +20,8 @@ defmodule OpenPaymentsSnippets.Commands.Keys do
     end
   end
 
-  defp load_key(options) do
+  @spec load(keyword()) :: {:ok, Key.t()} | {:error, String.t()}
+  def load(options) do
     with {:ok, key_id} <- key_id(options),
          {:ok, source} <- key_source(options),
          {:ok, key} <- import_key(source, key_id) do

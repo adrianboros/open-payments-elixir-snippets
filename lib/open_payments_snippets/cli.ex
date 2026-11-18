@@ -22,16 +22,19 @@ defmodule OpenPaymentsSnippets.CLI do
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
+    grant request <file|-> Discover the auth server and request a signed grant
     pointer resolve <pointer> Convert a quoted payment pointer to a URL offline
 
   Options:
     -h, --help          Show help
     -v, --version       Show version information
     --json              Format results as JSON
-    --allow-http        Allow HTTP development URLs for resource commands
-    --key-id <id>       Override KEY_ID for key commands
-    --key-file <path>   Select a PEM file for key commands
+    --allow-http        Allow HTTP development URLs for resource/grant requests
+    --key-id <id>       Override KEY_ID for key commands or grant request
+    --key-file <path>   Select a PEM file for key commands or grant request
     --jwks              Export a key set with keys public
+    --wallet-address <address> Override WALLET_ADDRESS for grant request
+    --output <path>     Save grant request state and secrets to a new private file
 
   Wallet address defaults to the WALLET_ADDRESS environment variable.
 
@@ -57,7 +60,9 @@ defmodule OpenPaymentsSnippets.CLI do
           allow_http: :boolean,
           key_id: :string,
           key_file: :string,
-          jwks: :boolean
+          jwks: :boolean,
+          wallet_address: :string,
+          output: :string
         ],
         aliases: [h: :help, v: :version]
       )
@@ -75,8 +80,14 @@ defmodule OpenPaymentsSnippets.CLI do
           argument_error("The --allow-http option requires a resource command.")
 
         (Keyword.has_key?(options, :key_id) || Keyword.has_key?(options, :key_file)) &&
-            not match?({:keys, _}, command) ->
-          argument_error("Signing-key options require keys validate or keys public.")
+            not signing_command?(command) ->
+          argument_error(
+            "Signing-key options require keys validate, keys public, or grant request."
+          )
+
+        (Keyword.has_key?(options, :wallet_address) || Keyword.has_key?(options, :output)) &&
+            not match?({:grant, :request, _}, command) ->
+          argument_error("The --wallet-address and --output options require grant request.")
 
         Keyword.has_key?(options, :jwks) && command != {:keys, :public} ->
           argument_error("The --jwks option requires keys public.")
@@ -106,6 +117,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["keys", "public"]), do: {:ok, {:keys, :public}}
   defp command(["grant", "validate"]), do: {:ok, {:grant, :validate, nil}}
   defp command(["grant", "validate", source]), do: {:ok, {:grant, :validate, source}}
+  defp command(["grant", "request"]), do: {:ok, {:grant, :request, nil}}
+  defp command(["grant", "request", source]), do: {:ok, {:grant, :request, source}}
   defp command(["pointer", "resolve"]), do: {:ok, {:pointer, :resolve, nil}}
   defp command(["pointer", "resolve", pointer]), do: {:ok, {:pointer, :resolve, pointer}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
@@ -113,7 +126,12 @@ defmodule OpenPaymentsSnippets.CLI do
   defp resource_command?({group, _operation, _target}) when group in [:wallet, :incoming],
     do: true
 
+  defp resource_command?({:grant, :request, _}), do: true
   defp resource_command?(_command), do: false
+
+  defp signing_command?({:keys, _}), do: true
+  defp signing_command?({:grant, :request, _}), do: true
+  defp signing_command?(_command), do: false
 
   defp execute(:default, options) do
     command = if options[:version], do: :version, else: :help
@@ -160,6 +178,26 @@ defmodule OpenPaymentsSnippets.CLI do
 
       {:error, message} ->
         argument_error(message)
+    end
+  end
+
+  defp execute({:grant, :request, source}, options) do
+    case Grants.request(source, options) do
+      {:ok, result} ->
+        output =
+          if Keyword.get(options, :json, false),
+            do: Jason.encode!(result),
+            else: "Grant #{result.status}\nGrant session saved to the requested private file."
+
+        IO.puts(output)
+        0
+
+      {:error, {:argument, message}} ->
+        argument_error(message)
+
+      {:error, {:operation, message}} ->
+        IO.puts(:stderr, "Error: #{message}")
+        1
     end
   end
 

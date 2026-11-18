@@ -19,8 +19,13 @@ defmodule OpenPaymentsSnippets.Test.HTTPServer do
           :gen_tcp.recv(connection, 0, 5_000)
 
         headers = headers(connection, %{})
-        send(owner, {:http_request, %{method: method, target: target, headers: headers}})
-        respond(connection, response)
+        :ok = :inet.setopts(connection, packet: :raw)
+        length = headers |> Map.get("content-length", "0") |> String.to_integer()
+        body = if length == 0, do: "", else: elem(:gen_tcp.recv(connection, length, 5_000), 1)
+        wire = %{method: method, target: target, headers: headers, body: body}
+        send(owner, {:http_request, wire})
+        result = if is_function(response, 1), do: response.(wire), else: response
+        respond(connection, result)
         :gen_tcp.close(connection)
         serve(listener, owner, response)
 

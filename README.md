@@ -81,6 +81,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments keys public --jwks` | Export a public JWKS containing that key |
 | `open-payments grant validate <file>` | Validate a complete grant-request JSON file offline |
 | `open-payments grant validate - --json` | Validate grant-request JSON from stdin and return a summary |
+| `open-payments grant request <file\|-> --output <path>` | Discover the authorization server, request a signed grant, and save private session state |
 | `open-payments pointer resolve <pointer>` | Convert a quoted payment pointer to a URL offline |
 | `open-payments pointer resolve <pointer> --json` | Return the resolved URL in a JSON `url` field |
 
@@ -93,7 +94,7 @@ Key-set JSON contains a `keys` array of public JWK objects using the SDK's
 encoders. Empty sets and duplicate key IDs retain the SDK's supported behavior.
 
 Options accept standard boolean values and negation. `--json` applies to version,
-wallet, incoming-payment, key-command, grant-validation, and pointer results. Unknown commands, extra arguments, conflicting help/version requests,
+wallet, incoming-payment, key-command, grant, and pointer results. Unknown commands, extra arguments, conflicting help/version requests,
 and unknown or invalid options produce diagnostics. See the [OptionParser documentation](https://elixir.hexdocs.pm/OptionParser.html).
 
 Results go to stdout. Diagnostics go to stderr. Exit statuses are 0 for success,
@@ -202,7 +203,8 @@ or `PRIVATE_KEY_BASE64`.
 count as unset. If both environment key sources are populated, the command
 returns a configuration error. `--key-file` selects a file for the current
 invocation and takes precedence over the environment key sources. `--key-id`
-takes precedence over `KEY_ID`. These flags apply to `keys validate` and `keys public`.
+takes precedence over `KEY_ID`. These flags apply to `keys validate`, `keys public`,
+and `grant request`.
 
 The SDK performs key import and validation. Success returns status 0 and shows
 the key ID. JSON output contains `valid: true` and `key_id`. Missing or invalid
@@ -257,6 +259,52 @@ Success returns status 0 with `Valid grant request`, or `{"valid":true}` when
 2 with diagnostics on stderr. Schema errors include the SDK's field paths and
 constraint messages. Payload values stay out of results and diagnostics.
 
+## Signed grant requests
+
+Submit a complete payload in the same format as `grant validate`, including its
+`client` identity. Load the wallet and signing settings described above, then use
+a new output file outside the repository.
+
+```sh
+./open-payments grant request '/absolute/path/to/grant-request.json' \
+  --output '/absolute/private/directory/grant-session.json'
+cat '/absolute/path/to/grant-request.json' | ./open-payments grant request - \
+  --output '/absolute/private/directory/another-session.json' --json
+```
+
+`WALLET_ADDRESS` selects the wallet used for discovery and signing configuration;
+`--wallet-address` overrides it and accepts a URL or quoted payment pointer.
+`KEY_ID` and one of `PRIVATE_KEY_FILE` or `PRIVATE_KEY_BASE64` supply the registered
+signing key. `--key-id` and `--key-file` have the same precedence as key commands.
+These settings do not rewrite the payload's explicit client identity.
+
+The command validates the payload and configuration, then creates the output file
+exclusively and sets permissions to `0600` before making any requests. Its parent
+directory must already exist. Existing files and symlinks are rejected. Keep
+this file private and outside Git: it contains the full SDK grant response,
+including continuation and issued access tokens, plus versioned context for
+future continuation (wallet/key IDs, exact grant endpoint, response receipt time
+and requested finish callback). It never contains the private signing key or a
+copy of the complete request payload.
+
+Wallet discovery is an unsigned GET. The SDK sends one signed POST to the exact
+discovered `authServer` URL, preserving its tenant path and query. Local HTTP
+requires `--allow-http`. Redirects and automatic retries are disabled.
+
+Success returns status 0 for both pending consent and immediate approval. Text
+output reports `Grant pending` or `Grant approved`; `--json` returns only
+`{"status":"pending","saved":true}` or its approved equivalent. Both modes
+keep tokens, response extensions and callback nonces out of stdout. For a pending
+redirect interaction, the consent link is at `response.interact.redirect` inside
+the saved file. The command does not open the link or verify/continue callbacks.
+Grant continuation, cancellation and token commands are subsequent increments.
+
+Argument/configuration errors return status 2; HTTP, transport, response-decoding
+and session-file failures return status 1. Diagnostics omit payload values,
+key paths, tokens and server error bodies. Failed operations remove the newly
+created file. A transport, decoding or post-response save failure can happen after
+the server created a grant; review that outcome before submitting another request.
+
 ## Development
 
 ```sh
@@ -266,6 +314,6 @@ mix compile --warnings-as-errors
 ```
 
 After fetching dependencies, the test suite runs offline and uses a local HTTP
-server for wallet and public incoming-payment tests. `OpenPaymentsSnippets.CLI.run/1` returns
+server for wallet, public incoming-payment and signed grant tests. `OpenPaymentsSnippets.CLI.run/1` returns
 the exit status for callers and tests. The executable entry point `main/1`
 terminates the VM with that status.
