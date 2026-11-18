@@ -3,7 +3,7 @@ defmodule OpenPaymentsSnippets.Commands.Grants do
 
   alias OpenPayments.{Client, Error, Grant, Key, WalletAddress}
   alias OpenPayments.Types.{GrantRequest, GrantResponse}
-  alias OpenPaymentsSnippets.Commands.Keys
+  alias OpenPaymentsSnippets.Config
 
   @spec validate(String.t() | nil) :: {:ok, %{valid: true}} | {:error, String.t()}
   def validate(source) do
@@ -17,19 +17,9 @@ defmodule OpenPaymentsSnippets.Commands.Grants do
   def request(source, options) do
     with {:ok, output} <- output_path(options),
          {:ok, request} <- read_request(source),
-         {:ok, key} <- Keys.load(options),
-         {:ok, wallet} <- wallet_address(options),
-         {:ok, client} <-
-           Client.new_authenticated(
-             wallet_address: wallet,
-             key: key,
-             allow_http: Keyword.get(options, :allow_http, false)
-           ) do
+         {:ok, client, key} <- Config.authenticated_client(options) do
       save_request(output, client, key, request)
     else
-      {:error, %Error{}} ->
-        {:error, {:argument, "Invalid wallet address or signing configuration."}}
-
       {:error, message} ->
         {:error, {:argument, message}}
     end
@@ -39,13 +29,6 @@ defmodule OpenPaymentsSnippets.Commands.Grants do
     case options[:output] do
       path when is_binary(path) and path not in ["", "-"] -> {:ok, path}
       _ -> {:error, "Supply --output with a new private grant-session file path."}
-    end
-  end
-
-  defp wallet_address(options) do
-    case Keyword.get(options, :wallet_address, System.get_env("WALLET_ADDRESS")) do
-      value when value in [nil, ""] -> {:error, "Supply --wallet-address or set WALLET_ADDRESS."}
-      value -> {:ok, value}
     end
   end
 

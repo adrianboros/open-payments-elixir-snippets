@@ -75,6 +75,8 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments wallet keys [address] --json` | The public JWKS as compact JSON |
 | `open-payments incoming get-public <url>` | Fetch public incoming-payment details as formatted JSON |
 | `open-payments incoming get-public <url> --json` | Public incoming-payment details as compact JSON |
+| `open-payments incoming get <url>` | Fetch authenticated incoming-payment details with a signed resource-token request |
+| `open-payments incoming get <url> --access-token-file <path> --json` | Read a resource token from a file and display redacted compact JSON |
 | `open-payments keys validate` | Validate an existing Ed25519 signing key offline |
 | `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
 | `open-payments keys public` | Export the configured key's public JWK as formatted JSON |
@@ -169,8 +171,8 @@ Use an existing incoming-payment resource URL to fetch its public details.
 
 The command requires a full resource URL. The SDK preserves its path, query, and
 supported port. Wallet payment pointers identify wallets; supply the complete
-incoming-payment URL returned when that payment was created. `WALLET_ADDRESS`
-provides defaults only for wallet commands.
+incoming-payment URL returned when that payment was created. This public read
+requires no wallet environment setting.
 
 Reads are unsigned and require no signing key or access token. The SDK handles
 HTTP, response decoding, protocol validation, redirects and retries. Local HTTP
@@ -181,6 +183,54 @@ Default output is formatted JSON, and `--json` produces compact JSON. Amounts,
 timestamps, returned URLs, optional fields, and extensions use the SDK's JSON
 representation. Fields named `sharedSecret`, including those nested in
 extensions, display `[REDACTED]` in both modes.
+
+## Authenticated incoming-payment reads
+
+Use `incoming get` for the SDK's authenticated response, which includes the
+wallet address and detailed payment fields. Supply the full incoming-payment
+resource URL, the signing settings above, and an issued **resource access token**
+with read permission for that payment. Continuation and token-management
+credentials serve different operations; the server verifies permissions,
+expiry and key binding.
+
+```sh
+./open-payments incoming get 'https://payments.example/tenant/incoming-payments/id' \
+  --access-token-file '/absolute/private/directory/resource-token.txt'
+./open-payments incoming get 'https://payments.example/tenant/incoming-payments/id' \
+  --access-token-file '/absolute/private/directory/resource-token.txt' --json
+```
+
+The token file contains only the opaque token value, without `GNAP`, quotes or
+JSON. A single trailing LF or CRLF is accepted; other whitespace is validated by
+the SDK. Keep the file outside Git with owner-only permissions. Alternatively,
+load `ACCESS_TOKEN` into your shell environment. `--access-token-file` overrides
+the environment value, including when the file is missing or invalid. Token
+values are not accepted as command-line flags.
+
+For an immediately approved `grant request`, the issued resource token is saved
+at `response.access_token.value`. Use a grant allowing incoming-payment `read`
+access. A pending consent response's `response.continue.access_token.value` is a
+continuation credential and cannot authorize this read. The CLI does not yet
+extract tokens from grant-session files or continue pending grants.
+
+`WALLET_ADDRESS`, `KEY_ID`, and one explicit private-key source configure the
+authenticated client. `--wallet-address`, `--key-id`, and `--key-file` override
+their defaults. Wallet URLs and quoted payment pointers are supported as the
+client identity; the payment URL remains an explicit resource URL. This command
+performs no wallet discovery and does not infer a resource path from the wallet.
+
+The SDK sends one signed GET with `Authorization: GNAP <token>` and no request
+body. Paths and queries retain their spelling. HTTPS is required unless
+`--allow-http` is supplied for local development. Redirects and automatic retries
+are disabled. The SDK validates the detailed response, payment methods and asset
+consistency. It does not create or complete a payment.
+
+Default output is formatted JSON and `--json` produces compact JSON. Both modes
+replace every `sharedSecret` field with `[REDACTED]`, including nested metadata
+and extension data. Other fields use the SDK's wire representation, preserving
+decimal amount strings and timestamp spelling. Request tokens, private keys,
+file paths and server error bodies stay out of diagnostics. Missing or invalid
+inputs return status 2; HTTP, transport, signing and response failures return 1.
 
 ## Signing-key validation
 
@@ -204,7 +254,7 @@ count as unset. If both environment key sources are populated, the command
 returns a configuration error. `--key-file` selects a file for the current
 invocation and takes precedence over the environment key sources. `--key-id`
 takes precedence over `KEY_ID`. These flags apply to `keys validate`, `keys public`,
-and `grant request`.
+`grant request`, and `incoming get`.
 
 The SDK performs key import and validation. Success returns status 0 and shows
 the key ID. JSON output contains `valid: true` and `key_id`. Missing or invalid
@@ -314,6 +364,6 @@ mix compile --warnings-as-errors
 ```
 
 After fetching dependencies, the test suite runs offline and uses a local HTTP
-server for wallet, public incoming-payment and signed grant tests. `OpenPaymentsSnippets.CLI.run/1` returns
+server for wallet, public/authenticated incoming-payment and signed grant tests. `OpenPaymentsSnippets.CLI.run/1` returns
 the exit status for callers and tests. The executable entry point `main/1`
 terminates the VM with that status.

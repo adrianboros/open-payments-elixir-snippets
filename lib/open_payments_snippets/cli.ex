@@ -7,8 +7,8 @@ defmodule OpenPaymentsSnippets.CLI do
   """
 
   alias OpenPayments.{Client, Error, IncomingPayment, PaymentPointer, WalletAddress}
-  alias OpenPayments.Types.{JWKS, PublicIncomingPayment}
-  alias OpenPaymentsSnippets.Commands.{Grants, Keys}
+  alias OpenPayments.Types.{IncomingPaymentWithMethods, JWKS, PublicIncomingPayment}
+  alias OpenPaymentsSnippets.Commands.{Grants, IncomingPayments, Keys}
 
   @help """
   Usage: open-payments [command] [options]
@@ -19,6 +19,7 @@ defmodule OpenPaymentsSnippets.CLI do
     wallet get [address] Fetch public wallet information using a URL or payment pointer
     wallet keys [address] Fetch the wallet's public JSON Web Key Set
     incoming get-public <url> Fetch public incoming-payment details
+    incoming get <url>   Fetch incoming-payment details with a signed resource-token request
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
@@ -30,10 +31,11 @@ defmodule OpenPaymentsSnippets.CLI do
     -v, --version       Show version information
     --json              Format results as JSON
     --allow-http        Allow HTTP development URLs for resource/grant requests
-    --key-id <id>       Override KEY_ID for key commands or grant request
-    --key-file <path>   Select a PEM file for key commands or grant request
+    --key-id <id>       Override KEY_ID for key commands or authenticated requests
+    --key-file <path>   Select a PEM file for key commands or authenticated requests
     --jwks              Export a key set with keys public
-    --wallet-address <address> Override WALLET_ADDRESS for grant request
+    --wallet-address <address> Override WALLET_ADDRESS for authenticated requests
+    --access-token-file <path> Read a resource token for incoming get, overriding ACCESS_TOKEN
     --output <path>     Save grant request state and secrets to a new private file
 
   Wallet address defaults to the WALLET_ADDRESS environment variable.
@@ -62,7 +64,8 @@ defmodule OpenPaymentsSnippets.CLI do
           key_file: :string,
           jwks: :boolean,
           wallet_address: :string,
-          output: :string
+          output: :string,
+          access_token_file: :string
         ],
         aliases: [h: :help, v: :version]
       )
@@ -82,12 +85,18 @@ defmodule OpenPaymentsSnippets.CLI do
         (Keyword.has_key?(options, :key_id) || Keyword.has_key?(options, :key_file)) &&
             not signing_command?(command) ->
           argument_error(
-            "Signing-key options require keys validate, keys public, or grant request."
+            "Signing-key options require keys validate, keys public, grant request, or incoming get."
           )
 
-        (Keyword.has_key?(options, :wallet_address) || Keyword.has_key?(options, :output)) &&
+        Keyword.has_key?(options, :output) &&
             not match?({:grant, :request, _}, command) ->
-          argument_error("The --wallet-address and --output options require grant request.")
+          argument_error("The --output option requires grant request.")
+
+        Keyword.has_key?(options, :wallet_address) && not authenticated_command?(command) ->
+          argument_error("The --wallet-address option requires grant request or incoming get.")
+
+        Keyword.has_key?(options, :access_token_file) && not match?({:incoming, :get, _}, command) ->
+          argument_error("The --access-token-file option requires incoming get.")
 
         Keyword.has_key?(options, :jwks) && command != {:keys, :public} ->
           argument_error("The --jwks option requires keys public.")
@@ -113,6 +122,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["wallet", "keys", address]), do: {:ok, {:wallet, :keys, address}}
   defp command(["incoming", "get-public"]), do: {:ok, {:incoming, :get_public, nil}}
   defp command(["incoming", "get-public", url]), do: {:ok, {:incoming, :get_public, url}}
+  defp command(["incoming", "get"]), do: {:ok, {:incoming, :get, nil}}
+  defp command(["incoming", "get", url]), do: {:ok, {:incoming, :get, url}}
   defp command(["keys", "validate"]), do: {:ok, {:keys, :validate}}
   defp command(["keys", "public"]), do: {:ok, {:keys, :public}}
   defp command(["grant", "validate"]), do: {:ok, {:grant, :validate, nil}}
@@ -130,8 +141,11 @@ defmodule OpenPaymentsSnippets.CLI do
   defp resource_command?(_command), do: false
 
   defp signing_command?({:keys, _}), do: true
-  defp signing_command?({:grant, :request, _}), do: true
-  defp signing_command?(_command), do: false
+  defp signing_command?(command), do: authenticated_command?(command)
+
+  defp authenticated_command?({:grant, :request, _}), do: true
+  defp authenticated_command?({:incoming, :get, _}), do: true
+  defp authenticated_command?(_command), do: false
 
   defp execute(:default, options) do
     command = if options[:version], do: :version, else: :help
@@ -147,6 +161,9 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp execute({:incoming, :get_public, url}, options),
     do: get_resource(:get_public, url, options)
+
+  defp execute({:incoming, :get, url}, options),
+    do: get_resource(:get_authenticated, url, options)
 
   defp execute({:keys, operation}, options) do
     outcome =
@@ -257,7 +274,8 @@ defmodule OpenPaymentsSnippets.CLI do
     application |> Application.spec(:vsn) |> to_string()
   end
 
-  defp get_resource(:get_public, url, _options) when url in [nil, ""] do
+  defp get_resource(operation, url, _options)
+       when operation in [:get_public, :get_authenticated] and url in [nil, ""] do
     argument_error("Supply a full incoming-payment URL.")
   end
 
@@ -266,27 +284,46 @@ defmodule OpenPaymentsSnippets.CLI do
   end
 
   defp get_resource(operation, address, options) do
-    with {:ok, client} <- Client.new_public(allow_http: Keyword.get(options, :allow_http, false)),
-         {:ok, resource} <- fetch_resource(client, operation, address) do
-      IO.puts(format_resource(resource, Keyword.get(options, :json, false)))
-      0
-    else
+    case fetch_resource(operation, address, options) do
+      {:ok, resource} ->
+        IO.puts(format_resource(resource, Keyword.get(options, :json, false)))
+        0
+
       {:error, %Error{kind: kind} = error} when kind in [:validation, :configuration] ->
         argument_error(resource_error(error))
 
       {:error, %Error{} = error} ->
         IO.puts(:stderr, "Error: #{resource_error(error)}")
         1
+
+      {:error, message} ->
+        argument_error(message)
     end
   end
 
-  defp fetch_resource(client, :get, address), do: WalletAddress.get(client, address)
-  defp fetch_resource(client, :keys, address), do: WalletAddress.get_keys(client, address)
-  defp fetch_resource(client, :get_public, url), do: IncomingPayment.get_public(client, url)
+  defp fetch_resource(:get_authenticated, url, options), do: IncomingPayments.get(url, options)
+
+  defp fetch_resource(operation, address, options) do
+    with {:ok, client} <- Client.new_public(allow_http: Keyword.get(options, :allow_http, false)),
+         do: fetch_public_resource(client, operation, address)
+  end
+
+  defp fetch_public_resource(client, :get, address), do: WalletAddress.get(client, address)
+  defp fetch_public_resource(client, :keys, address), do: WalletAddress.get_keys(client, address)
+
+  defp fetch_public_resource(client, :get_public, url),
+    do: IncomingPayment.get_public(client, url)
 
   defp format_resource(%PublicIncomingPayment{} = payment, json?) do
     payment
     |> PublicIncomingPayment.to_map()
+    |> redact_shared_secrets()
+    |> Jason.encode!(pretty: not json?)
+  end
+
+  defp format_resource(%IncomingPaymentWithMethods{} = payment, json?) do
+    payment
+    |> IncomingPaymentWithMethods.to_map()
     |> redact_shared_secrets()
     |> Jason.encode!(pretty: not json?)
   end
@@ -322,6 +359,10 @@ defmodule OpenPaymentsSnippets.CLI do
     "Invalid incoming-payment URL. Use a full HTTPS resource URL; local HTTP requires --allow-http."
   end
 
+  defp resource_error(%Error{kind: :validation, operation: :get_incoming_payment}) do
+    "Invalid incoming-payment URL or resource access token. Use a full HTTPS resource URL; local HTTP requires --allow-http."
+  end
+
   defp resource_error(%Error{kind: :validation}) do
     "Invalid wallet address. Use an HTTPS URL or payment pointer; local HTTP requires --allow-http."
   end
@@ -338,8 +379,13 @@ defmodule OpenPaymentsSnippets.CLI do
   defp resource_error(%Error{kind: :decoding} = error),
     do: "#{resource_label(error)} returned an invalid response."
 
+  defp resource_error(%Error{kind: :signing}), do: "Unable to sign the incoming-payment request."
+
   defp resource_label(%Error{operation: :get_public_incoming_payment}),
     do: "Incoming-payment read"
+
+  defp resource_label(%Error{operation: :get_incoming_payment}),
+    do: "Authenticated incoming-payment read"
 
   defp resource_label(_error), do: "Wallet discovery"
 
