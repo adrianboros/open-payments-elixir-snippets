@@ -43,7 +43,7 @@ defmodule OpenPaymentsSnippets.Commands.GrantContinuation do
               "signing_jwk" => JWK.to_map(Key.public_jwk(key)),
               "response" => GrantContinuationResponse.to_map(response)
             })
-            |> Map.delete("attempted_at")
+            |> Map.drop(~w(attempted_at token_rotated_at token_rotation_response))
 
           with :ok <- GrantSession.save(path, updated), do: {:ok, summary(response)}
 

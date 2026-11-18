@@ -24,7 +24,8 @@ defmodule OpenPaymentsSnippets.CLI do
     Grants,
     IncomingPayments,
     Keys,
-    Quotes
+    Quotes,
+    TokenRotation
   }
 
   @help """
@@ -48,6 +49,7 @@ defmodule OpenPaymentsSnippets.CLI do
     grant request <file|-> Discover the auth server and request a signed grant
     grant continue <session> Continue a saved grant once and update its private session
     grant cancel <session> Cancel a saved grant and mark its private session cancelled
+    token rotate <session> Rotate the issued token in a private grant session
     pointer resolve <pointer> Convert a quoted payment pointer to a URL offline
 
   Options:
@@ -192,6 +194,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["grant", "continue", session]), do: {:ok, {:grant, :continue, session}}
   defp command(["grant", "cancel"]), do: {:ok, {:grant, :cancel, nil}}
   defp command(["grant", "cancel", session]), do: {:ok, {:grant, :cancel, session}}
+  defp command(["token", "rotate"]), do: {:ok, {:token, :rotate, nil}}
+  defp command(["token", "rotate", session]), do: {:ok, {:token, :rotate, session}}
   defp command(["pointer", "resolve"]), do: {:ok, {:pointer, :resolve, nil}}
   defp command(["pointer", "resolve", pointer]), do: {:ok, {:pointer, :resolve, pointer}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
@@ -202,6 +206,7 @@ defmodule OpenPaymentsSnippets.CLI do
   defp resource_command?({:grant, operation, _}) when operation in [:request, :continue, :cancel],
     do: true
 
+  defp resource_command?({:token, :rotate, _}), do: true
   defp resource_command?(_command), do: false
 
   defp signing_command?({:keys, _}), do: true
@@ -211,6 +216,7 @@ defmodule OpenPaymentsSnippets.CLI do
        when operation in [:request, :continue, :cancel],
        do: true
 
+  defp authenticated_command?({:token, :rotate, _}), do: true
   defp authenticated_command?(command), do: resource_token_command?(command)
 
   defp resource_token_command?({:incoming, operation, _})
@@ -313,31 +319,11 @@ defmodule OpenPaymentsSnippets.CLI do
         :cancel -> GrantCancellation.run(session, options)
       end
 
-    case result do
-      {:ok, result} ->
-        output =
-          cond do
-            options[:json] ->
-              Jason.encode!(result)
-
-            result.status == "waiting" ->
-              "Grant waiting\nWait #{result.wait_seconds} seconds before continuing."
-
-            true ->
-              "Grant #{result.status}\nGrant session updated."
-          end
-
-        IO.puts(output)
-        0
-
-      {:error, {:argument, message}} ->
-        argument_error(message)
-
-      {:error, {:operation, message}} ->
-        IO.puts(:stderr, "Error: #{message}")
-        1
-    end
+    print_session_result(result, options, "Grant")
   end
+
+  defp execute({:token, :rotate, session}, options),
+    do: print_session_result(TokenRotation.run(session, options), options, "Token")
 
   defp execute({:pointer, :resolve, pointer}, _options) when pointer in [nil, ""] do
     argument_error("Supply a payment pointer, quoted with single quotes.")
@@ -352,6 +338,33 @@ defmodule OpenPaymentsSnippets.CLI do
 
       {:error, %Error{}} ->
         argument_error("Invalid payment pointer. Quote '$host[/path]' with single quotes.")
+    end
+  end
+
+  defp print_session_result(result, options, label) do
+    case result do
+      {:ok, result} ->
+        output =
+          cond do
+            options[:json] ->
+              Jason.encode!(result)
+
+            result.status == "waiting" ->
+              "#{label} waiting\nWait #{result.wait_seconds} seconds before continuing."
+
+            true ->
+              "#{label} #{result.status}\nGrant session updated."
+          end
+
+        IO.puts(output)
+        0
+
+      {:error, {:argument, message}} ->
+        argument_error(message)
+
+      {:error, {:operation, message}} ->
+        IO.puts(:stderr, "Error: #{message}")
+        1
     end
   end
 

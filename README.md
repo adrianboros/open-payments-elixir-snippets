@@ -91,6 +91,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments grant request <file\|-> --output <path>` | Discover the authorization server, request a signed grant, and save private session state |
 | `open-payments grant continue <session>` | Continue once using saved continuation credentials and update the private session |
 | `open-payments grant cancel <session>` | Cancel using saved continuation credentials and mark the private session cancelled |
+| `open-payments token rotate <session>` | Rotate the issued access token and save its replacement in the private grant session |
 | `open-payments pointer resolve <pointer>` | Convert a quoted payment pointer to a URL offline |
 | `open-payments pointer resolve <pointer> --json` | Return the resolved URL in a JSON `url` field |
 
@@ -567,8 +568,8 @@ output reports `Grant pending` or `Grant approved`; `--json` returns only
 keep tokens, response extensions and callback nonces out of stdout. For a pending
 redirect interaction, the consent link is at `response.interact.redirect` inside
 the saved file. Use `grant continue` to verify the returned callback and resume.
-Use `grant cancel` to cancel the saved grant. Token management is a subsequent
-increment.
+Use `grant cancel` to cancel the saved grant, or `token rotate` to replace an
+issued access token. Token revocation is a subsequent increment.
 
 Argument/configuration errors return status 2; HTTP, transport, response-decoding
 and session-file failures return status 1. Diagnostics omit payload values,
@@ -694,6 +695,48 @@ the grant may be cancelled. Reconcile the server outcome before repairing state
 or removing a stale lock. Diagnostics omit credentials and server bodies. Exit
 statuses are 0 for saved cancellation, 2 for invalid input/configuration, and 1 for
 operation, locking or write failures.
+
+## Token rotation
+
+Rotate an issued access token in an approved initial or continued grant session:
+
+```sh
+./open-payments token rotate '/absolute/private/directory/grant-session.json'
+./open-payments token rotate '/absolute/private/directory/another-session.json' --json
+```
+
+Use the same private signing key as initiation. Recorded wallet/key IDs are the
+defaults; explicit identity overrides must match, and `--key-file` overrides the
+key environment settings. The session must contain a complete issued
+`response.access_token`, including its management URI and access list. Pending
+and subject-only sessions have no token to rotate. The raw `ACCESS_TOKEN`
+environment setting and continuation credentials are not used for rotation.
+Resource-token files, callback, pagination and output-file flags are rejected.
+
+The SDK sends one signed, bodyless POST to the token's exact management URI using
+that token's value. It performs no discovery, redirect or automatic retry; local
+HTTP requires `--allow-http`. HTTP 200 must contain the SDK's token-rotation
+response wrapper. On success the CLI atomically replaces
+`response.access_token` with the new token, including its new management URI,
+access and expiry metadata. The full response and permitted extensions are kept
+privately at `token_rotation_response`, with a separate `token_rotated_at` time.
+A subsequent rotation uses these latest credentials and replaces that snapshot.
+
+Grant continuation credentials, callback context and the original response receipt
+time are preserved, so token rotation does not reset a continuation wait interval.
+A later successful grant continuation replaces the grant response and removes the
+superseded rotation snapshot. The server determines token invalidation and signing
+key binding. Rotation does not change the private signing key, update environment
+variables or token files, compare granted scopes, or interpret elapsed expiry.
+
+Text reports `Token rotated`; JSON returns only
+`{"status":"rotated","saved":true}`. Tokens, subjects, card data and server
+extensions stay in the private file. Rotation shares grant commands' `0600`
+single-link file requirement, exclusive lock and durable in-flight/uncertain
+markers. Ambiguous failures block further token/grant operations pending
+reconciliation; a post-response write failure can lose the replacement token
+while retaining the old in-flight record. Exit statuses are 0 for a saved
+rotation, 2 for invalid input/configuration, and 1 for operation/file failures.
 
 ## Development
 
