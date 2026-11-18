@@ -79,6 +79,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments incoming get <url> --access-token-file <path> --json` | Read a resource token from a file and display redacted compact JSON |
 | `open-payments incoming create <file\|->` | Discover the receiving wallet's resource server and submit one signed creation request |
 | `open-payments incoming complete <url>` | Mark an incoming payment complete using one signed POST |
+| `open-payments incoming list [address]` | Discover a wallet and fetch one signed page of incoming payments |
 | `open-payments keys validate` | Validate an existing Ed25519 signing key offline |
 | `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
 | `open-payments keys public` | Export the configured key's public JWK as formatted JSON |
@@ -321,6 +322,46 @@ No retry, redirect or automatic readback occurs. A transport or invalid-response
 failure may follow successful completion on the server; review the outcome
 before manually repeating the command.
 
+## Incoming-payment listing
+
+Fetch one page with a resource access token granting incoming-payment `list`
+permission. The optional address accepts a wallet URL or quoted payment pointer.
+When omitted, it defaults to the configured signing wallet (`--wallet-address`
+over exported `WALLET_ADDRESS`). An explicit list address selects the wallet to
+discover without changing the signing client.
+
+```sh
+./open-payments incoming list --first 10 \
+  --access-token-file '/absolute/private/directory/list-token.txt'
+./open-payments incoming list '$wallet.example/receiver' --last 10 \
+  --cursor 'opaque-cursor' --access-token-file '/absolute/private/directory/list-token.txt' --json
+```
+
+The command discovers that wallet unsigned, then uses its returned ID as the
+wallet filter and its `resourceServer` as the collection base. The SDK appends
+`/incoming-payments`, encodes `wallet-address` and pagination arguments, and signs
+the complete GET URL. Tenant paths and trailing slashes are preserved. A base
+URL containing a query is rejected; local HTTP requires `--allow-http`.
+
+`--first` and `--last` are mutually exclusive integer counts from 1 through 100.
+`--cursor` is an opaque nonempty string, preserved and encoded by the SDK. It can
+be supplied alone or with a count. No page size, direction or cursor is defaulted
+when flags are omitted. Pagination flags apply only to `incoming list`.
+
+The result contains SDK `pagination` metadata and a `result` array. Empty pages,
+item order and duplicates are retained. Default output is formatted JSON;
+`--json` produces compact JSON. Nested `sharedSecret` fields in metadata,
+amount extensions or the page wrapper are recursively redacted. Other data,
+including cursors, decimal amount strings and timestamps, keeps the SDK's wire
+representation. The SDK validates every detailed item and its amount assets.
+
+Only one page is fetched, even when `hasNextPage` is true. Choose the next cursor
+and direction explicitly for a subsequent invocation. Signing settings, token
+sources and overrides use the same rules as other authenticated incoming
+commands. Input/configuration/pagination errors return status 2; HTTP, transport,
+signing and invalid-response failures return 1 with safe diagnostics. Redirects
+and automatic retries remain disabled.
+
 ## Signing-key validation
 
 Validate an existing unencrypted Ed25519 PKCS#8 PEM key using its file path and
@@ -343,7 +384,7 @@ count as unset. If both environment key sources are populated, the command
 returns a configuration error. `--key-file` selects a file for the current
 invocation and takes precedence over the environment key sources. `--key-id`
 takes precedence over `KEY_ID`. These flags apply to `keys validate`, `keys public`,
-`grant request`, `incoming get`, `incoming create`, and `incoming complete`.
+`grant request`, `incoming get`, `incoming create`, `incoming complete`, and `incoming list`.
 
 The SDK performs key import and validation. Success returns status 0 and shows
 the key ID. JSON output contains `valid: true` and `key_id`. Missing or invalid

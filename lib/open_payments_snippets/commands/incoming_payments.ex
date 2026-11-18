@@ -1,8 +1,15 @@
 defmodule OpenPaymentsSnippets.Commands.IncomingPayments do
   @moduledoc false
 
-  alias OpenPayments.{Error, IncomingPayment, WalletAddress}
-  alias OpenPayments.Types.{CreateIncomingPayment, IncomingPaymentWithMethods}
+  alias OpenPayments.{Client, Error, IncomingPayment, WalletAddress}
+
+  alias OpenPayments.Types.{
+    CreateIncomingPayment,
+    IncomingPaymentPaginationResult,
+    IncomingPaymentWithMethods,
+    Pagination
+  }
+
   alias OpenPayments.Types.IncomingPayment, as: IncomingPaymentData
   alias OpenPaymentsSnippets.{Config, Input}
 
@@ -21,6 +28,41 @@ defmodule OpenPaymentsSnippets.Commands.IncomingPayments do
     with {:ok, token} <- access_token(options),
          {:ok, client, _key} <- Config.authenticated_client(options) do
       IncomingPayment.complete(client, url, access_token: token)
+    end
+  end
+
+  @spec list(String.t() | nil, keyword()) ::
+          {:ok, IncomingPaymentPaginationResult.t()} | {:error, Error.t() | String.t()}
+  def list(address, options) do
+    with {:ok, pagination} <- pagination_options(options),
+         {:ok, token} <- access_token(options),
+         {:ok, client, _key} <- Config.authenticated_client(options),
+         {:ok, wallet} <- WalletAddress.get(client, address || Client.wallet_address(client)) do
+      IncomingPayment.list(
+        client,
+        wallet.resource_server,
+        wallet.id,
+        [access_token: token] ++ pagination
+      )
+    else
+      {:error, %Error{operation: nil} = error} ->
+        {:error, %{error | operation: :list_incoming_payments}}
+
+      {:error, error} ->
+        {:error, error}
+    end
+  end
+
+  defp pagination_options(options) do
+    data =
+      for {key, value} <- Keyword.take(options, [:first, :last, :cursor]),
+          into: %{},
+          do: {Atom.to_string(key), value}
+
+    if map_size(data) == 0 do
+      {:ok, []}
+    else
+      with {:ok, pagination} <- Pagination.from_map(data), do: {:ok, [pagination: pagination]}
     end
   end
 

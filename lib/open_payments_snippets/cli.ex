@@ -7,7 +7,14 @@ defmodule OpenPaymentsSnippets.CLI do
   """
 
   alias OpenPayments.{Client, Error, IncomingPayment, PaymentPointer, WalletAddress}
-  alias OpenPayments.Types.{IncomingPaymentWithMethods, JWKS, PublicIncomingPayment}
+
+  alias OpenPayments.Types.{
+    IncomingPaymentPaginationResult,
+    IncomingPaymentWithMethods,
+    JWKS,
+    PublicIncomingPayment
+  }
+
   alias OpenPayments.Types.IncomingPayment, as: IncomingPaymentData
   alias OpenPaymentsSnippets.Commands.{Grants, IncomingPayments, Keys}
 
@@ -23,6 +30,7 @@ defmodule OpenPaymentsSnippets.CLI do
     incoming get <url>   Fetch incoming-payment details with a signed resource-token request
     incoming create <file|-> Discover the receiving wallet and create an incoming payment
     incoming complete <url> Mark an incoming payment complete with a signed request
+    incoming list [address] Discover a wallet and fetch one signed page of incoming payments
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
@@ -40,6 +48,9 @@ defmodule OpenPaymentsSnippets.CLI do
     --wallet-address <address> Override WALLET_ADDRESS for authenticated requests
     --access-token-file <path> Read a resource token for authenticated incoming commands
     --output <path>     Save grant request state and secrets to a new private file
+    --first <count>     Request 1-100 items forward with incoming list
+    --last <count>      Request 1-100 items backward with incoming list
+    --cursor <value>    Supply an opaque pagination cursor with incoming list
 
   Wallet address defaults to the WALLET_ADDRESS environment variable.
 
@@ -68,7 +79,10 @@ defmodule OpenPaymentsSnippets.CLI do
           jwks: :boolean,
           wallet_address: :string,
           output: :string,
-          access_token_file: :string
+          access_token_file: :string,
+          first: :integer,
+          last: :integer,
+          cursor: :string
         ],
         aliases: [h: :help, v: :version]
       )
@@ -104,6 +118,10 @@ defmodule OpenPaymentsSnippets.CLI do
         Keyword.has_key?(options, :jwks) && command != {:keys, :public} ->
           argument_error("The --jwks option requires keys public.")
 
+        Enum.any?([:first, :last, :cursor], &Keyword.has_key?(options, &1)) &&
+            not match?({:incoming, :list, _}, command) ->
+          argument_error("Pagination options require incoming list.")
+
         options[:help] ->
           print_help(Keyword.get(options, :json, false))
 
@@ -131,6 +149,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["incoming", "create", source]), do: {:ok, {:incoming, :create, source}}
   defp command(["incoming", "complete"]), do: {:ok, {:incoming, :complete, nil}}
   defp command(["incoming", "complete", url]), do: {:ok, {:incoming, :complete, url}}
+  defp command(["incoming", "list"]), do: {:ok, {:incoming, :list, nil}}
+  defp command(["incoming", "list", address]), do: {:ok, {:incoming, :list, address}}
   defp command(["keys", "validate"]), do: {:ok, {:keys, :validate}}
   defp command(["keys", "public"]), do: {:ok, {:keys, :public}}
   defp command(["grant", "validate"]), do: {:ok, {:grant, :validate, nil}}
@@ -154,7 +174,7 @@ defmodule OpenPaymentsSnippets.CLI do
   defp authenticated_command?(command), do: resource_token_command?(command)
 
   defp resource_token_command?({:incoming, operation, _})
-       when operation in [:get, :create, :complete],
+       when operation in [:get, :create, :complete, :list],
        do: true
 
   defp resource_token_command?(_command), do: false
@@ -182,6 +202,9 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp execute({:incoming, :complete, url}, options),
     do: get_resource(:complete, url, options)
+
+  defp execute({:incoming, :list, address}, options),
+    do: print_resource_result(IncomingPayments.list(address, options), options)
 
   defp execute({:keys, operation}, options) do
     outcome =
@@ -358,6 +381,13 @@ defmodule OpenPaymentsSnippets.CLI do
     |> Jason.encode!(pretty: not json?)
   end
 
+  defp format_resource(%IncomingPaymentPaginationResult{} = page, json?) do
+    page
+    |> IncomingPaymentPaginationResult.to_map()
+    |> redact_shared_secrets()
+    |> Jason.encode!(pretty: not json?)
+  end
+
   defp format_resource(resource, true), do: Jason.encode!(resource)
   defp format_resource(%JWKS{} = keys, false), do: Jason.encode!(keys, pretty: true)
 
@@ -399,6 +429,10 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp resource_error(%Error{kind: :validation, operation: :complete_incoming_payment}) do
     "Invalid incoming-payment URL or resource access token. Use a full HTTPS URL without a query; local HTTP requires --allow-http."
+  end
+
+  defp resource_error(%Error{kind: :validation, operation: :list_incoming_payments}) do
+    "Invalid pagination, resource-server URL, or resource access token. Choose either --first or --last (1-100), with an optional nonempty --cursor."
   end
 
   defp resource_error(%Error{kind: :validation}) do
@@ -446,6 +480,9 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp resource_label(%Error{operation: :complete_incoming_payment}),
     do: "Incoming-payment completion"
+
+  defp resource_label(%Error{operation: :list_incoming_payments}),
+    do: "Incoming-payment listing"
 
   defp resource_label(_error), do: "Wallet discovery"
 
