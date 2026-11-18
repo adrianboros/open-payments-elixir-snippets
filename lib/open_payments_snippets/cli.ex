@@ -17,7 +17,7 @@ defmodule OpenPaymentsSnippets.CLI do
 
   alias OpenPayments.Types.IncomingPayment, as: IncomingPaymentData
   alias OpenPayments.Types.Quote, as: QuoteData
-  alias OpenPaymentsSnippets.Commands.{Grants, IncomingPayments, Keys, Quotes}
+  alias OpenPaymentsSnippets.Commands.{GrantContinuation, Grants, IncomingPayments, Keys, Quotes}
 
   @help """
   Usage: open-payments [command] [options]
@@ -38,6 +38,7 @@ defmodule OpenPaymentsSnippets.CLI do
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
     grant request <file|-> Discover the auth server and request a signed grant
+    grant continue <session> Continue a saved grant once and update its private session
     pointer resolve <pointer> Convert a quoted payment pointer to a URL offline
 
   Options:
@@ -54,6 +55,8 @@ defmodule OpenPaymentsSnippets.CLI do
     --first <count>     Request 1-100 items forward with incoming list
     --last <count>      Request 1-100 items backward with incoming list
     --cursor <value>    Supply an opaque pagination cursor with incoming list
+    --callback-file <path|-> Read the returned callback URL for grant continue
+    --hash-encoding <profile> Callback hash encoding: base64 (default) or base64url
 
   Wallet address defaults to the WALLET_ADDRESS environment variable.
 
@@ -85,7 +88,9 @@ defmodule OpenPaymentsSnippets.CLI do
           access_token_file: :string,
           first: :integer,
           last: :integer,
-          cursor: :string
+          cursor: :string,
+          callback_file: :string,
+          hash_encoding: :string
         ],
         aliases: [h: :help, v: :version]
       )
@@ -124,6 +129,16 @@ defmodule OpenPaymentsSnippets.CLI do
         Enum.any?([:first, :last, :cursor], &Keyword.has_key?(options, &1)) &&
             not match?({:incoming, :list, _}, command) ->
           argument_error("Pagination options require incoming list.")
+
+        Enum.any?([:callback_file, :hash_encoding], &Keyword.has_key?(options, &1)) &&
+            not match?({:grant, :continue, _}, command) ->
+          argument_error("Callback options require grant continue.")
+
+        options[:hash_encoding] not in [nil, "base64", "base64url"] ->
+          argument_error("Hash encoding must be base64 or base64url.")
+
+        Keyword.has_key?(options, :hash_encoding) && not Keyword.has_key?(options, :callback_file) ->
+          argument_error("The --hash-encoding option requires --callback-file.")
 
         options[:help] ->
           print_help(Keyword.get(options, :json, false))
@@ -164,6 +179,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["grant", "validate", source]), do: {:ok, {:grant, :validate, source}}
   defp command(["grant", "request"]), do: {:ok, {:grant, :request, nil}}
   defp command(["grant", "request", source]), do: {:ok, {:grant, :request, source}}
+  defp command(["grant", "continue"]), do: {:ok, {:grant, :continue, nil}}
+  defp command(["grant", "continue", session]), do: {:ok, {:grant, :continue, session}}
   defp command(["pointer", "resolve"]), do: {:ok, {:pointer, :resolve, nil}}
   defp command(["pointer", "resolve", pointer]), do: {:ok, {:pointer, :resolve, pointer}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
@@ -171,13 +188,15 @@ defmodule OpenPaymentsSnippets.CLI do
   defp resource_command?({group, _operation, _target}) when group in [:wallet, :incoming, :quote],
     do: true
 
-  defp resource_command?({:grant, :request, _}), do: true
+  defp resource_command?({:grant, operation, _}) when operation in [:request, :continue], do: true
   defp resource_command?(_command), do: false
 
   defp signing_command?({:keys, _}), do: true
   defp signing_command?(command), do: authenticated_command?(command)
 
-  defp authenticated_command?({:grant, :request, _}), do: true
+  defp authenticated_command?({:grant, operation, _}) when operation in [:request, :continue],
+    do: true
+
   defp authenticated_command?(command), do: resource_token_command?(command)
 
   defp resource_token_command?({:incoming, operation, _})
@@ -260,6 +279,33 @@ defmodule OpenPaymentsSnippets.CLI do
           if Keyword.get(options, :json, false),
             do: Jason.encode!(result),
             else: "Grant #{result.status}\nGrant session saved to the requested private file."
+
+        IO.puts(output)
+        0
+
+      {:error, {:argument, message}} ->
+        argument_error(message)
+
+      {:error, {:operation, message}} ->
+        IO.puts(:stderr, "Error: #{message}")
+        1
+    end
+  end
+
+  defp execute({:grant, :continue, session}, options) do
+    case GrantContinuation.run(session, options) do
+      {:ok, result} ->
+        output =
+          cond do
+            options[:json] ->
+              Jason.encode!(result)
+
+            result.status == "waiting" ->
+              "Grant waiting\nWait #{result.wait_seconds} seconds before continuing."
+
+            true ->
+              "Grant #{result.status}\nGrant session updated."
+          end
 
         IO.puts(output)
         0

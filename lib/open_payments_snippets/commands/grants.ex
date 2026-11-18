@@ -74,6 +74,9 @@ defmodule OpenPaymentsSnippets.Commands.Grants do
       key_id: Key.key_id(key),
       grant_endpoint: endpoint,
       received_at: DateTime.to_iso8601(DateTime.utc_now()),
+      state: "ready",
+      callback_verified: false,
+      signing_jwk: Key.public_jwk(key),
       finish: if(request.interact, do: request.interact.finish),
       response: GrantResponse.to_map(response)
     }

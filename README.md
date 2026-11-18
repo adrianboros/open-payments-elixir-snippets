@@ -89,6 +89,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments grant validate <file>` | Validate a complete grant-request JSON file offline |
 | `open-payments grant validate - --json` | Validate grant-request JSON from stdin and return a summary |
 | `open-payments grant request <file\|-> --output <path>` | Discover the authorization server, request a signed grant, and save private session state |
+| `open-payments grant continue <session>` | Continue once using saved continuation credentials and update the private session |
 | `open-payments pointer resolve <pointer>` | Convert a quoted payment pointer to a URL offline |
 | `open-payments pointer resolve <pointer> --json` | Return the resolved URL in a JSON `url` field |
 
@@ -564,14 +565,97 @@ output reports `Grant pending` or `Grant approved`; `--json` returns only
 `{"status":"pending","saved":true}` or its approved equivalent. Both modes
 keep tokens, response extensions and callback nonces out of stdout. For a pending
 redirect interaction, the consent link is at `response.interact.redirect` inside
-the saved file. The command does not open the link or verify/continue callbacks.
-Grant continuation, cancellation and token commands are subsequent increments.
+the saved file. Use `grant continue` to verify the returned callback and resume.
+Grant cancellation and token commands are subsequent increments.
 
 Argument/configuration errors return status 2; HTTP, transport, response-decoding
 and session-file failures return status 1. Diagnostics omit payload values,
 key paths, tokens and server error bodies. Failed operations remove the newly
 created file. A transport, decoding or post-response save failure can happen after
 the server created a grant; review that outcome before submitting another request.
+
+## Grant continuation and callbacks
+
+Continue a saved grant using the same private signing key as initiation. Wallet
+and key IDs default to the session's recorded identity. Explicit `--wallet-address`
+and `--key-id` overrides must match it; the private key still comes from the
+existing file/base64 settings or `--key-file`. New sessions also bind the public
+JWK. Older version-1 files without that field remain readable; the server checks
+the continuation credential's signing-key binding. `ACCESS_TOKEN` and resource
+token files are not used for continuation.
+
+For redirect interactions, include a finish callback when requesting the grant:
+
+```json
+"interact": {
+  "start": ["redirect"],
+  "finish": {
+    "method": "redirect",
+    "uri": "https://client.example/return?state=your-session-state",
+    "nonce": "your-fresh-unguessable-ascii-nonce"
+  }
+}
+```
+
+Generate a fresh unpredictable nonce for every request and bind the callback
+URI/state to that session. Open the saved consent link yourself. Save the complete
+returned callback URL, with its percent encoding intact, in a private text file,
+then resume:
+
+```sh
+./open-payments grant continue '/absolute/private/directory/grant-session.json' \
+  --callback-file '/absolute/private/directory/callback.txt' --json
+```
+
+`--callback-file -` reads the URL from stdin. A single trailing LF or CRLF is
+accepted. Callback URLs must match the stored destination and fixed query values,
+with exactly one `hash` and `interact_ref`. Error/result fields, unexpected query
+values, duplicates and fragments are rejected. The CLI decodes query values once
+and asks the SDK to verify the hash against the saved client nonce, server nonce,
+interaction reference and exact initial grant endpoint. Copy the complete URL;
+manually decoding or rebuilding it can change the hash input.
+
+Default `--hash-encoding base64` matches the SDK's deployed Open Payments profile.
+For a server using unpadded base64url, explicitly select
+`--hash-encoding base64url` together with the callback file. There is no format
+fallback. Hash calculation and constant-time verification belong to the SDK.
+Endpoint spelling must agree with the server's hash context; a mismatch fails
+verification without sending a continuation request.
+
+The command honors the returned `continue.wait` relative to the saved UTC receipt
+time. An early invocation returns status 0 with `status: waiting`, `saved: false`
+and `wait_seconds`, without sleeping or consuming the callback. Retry explicitly
+after that interval. Continuation-only responses can be checked once more with:
+
+```sh
+./open-payments grant continue '/absolute/private/directory/grant-session.json' --json
+```
+
+Sessions that requested no finish callback, and immediately approved grants, use
+a bodyless continuation. A verified callback reference is sent only once. Later
+invocations use the latest returned continuation URI and credential with no body.
+The SDK signs one POST to that exact URI; no discovery, polling loop, redirect
+or automatic retry occurs. Local HTTP requires `--allow-http` again.
+
+The session must be a regular JSON file with permissions `0600` and one filesystem
+link. Symlinks and hard links are rejected. Continuation locks the file through
+an exclusive sibling `.lock`, records an in-flight attempt before HTTP, and
+updates it using a synced private temporary file and atomic rename. Success
+stores the latest response and receipt time with state `ready`. Callback replay
+and concurrent invocation are rejected. Interruptions can leave an in-flight
+record or stale lock; HTTP, transport and invalid-response failures leave state
+`uncertain`. Reconcile the server outcome before manually repairing that state
+or removing a stale lock. Restoring old file copies can reintroduce old credentials;
+use the current session as the authoritative local record.
+
+Stdout contains only status/save summaries, never tokens, callback hashes/nonces,
+subject data, file paths or server error bodies. `approved` means an access token
+was returned, `subject` means subject-only data, and `pending` means a
+continuation-only result. Full results stay in the private file. Expected waiting
+and successful results return 0, invalid input/configuration/callbacks return 2,
+and operation/locking/write failures return 1. A post-response save failure may
+lose the new credentials while retaining an in-flight marker; reconcile before
+another attempt.
 
 ## Development
 
