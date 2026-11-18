@@ -117,6 +117,10 @@ defmodule OpenPaymentsSnippets.GrantSession do
   defp decode_response(%{"kind" => "grant-continuation", "response" => data}),
     do: GrantContinuationResponse.from_map(data)
 
+  defp decode_response(%{"kind" => "token-revocation", "response" => data})
+       when is_map(data) and not is_map_key(data, "access_token"),
+       do: GrantContinuationResponse.from_map(data)
+
   defp decode_response(_session), do: {:error, :kind}
 
   defp load(path) do

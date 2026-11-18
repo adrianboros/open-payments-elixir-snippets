@@ -92,6 +92,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments grant continue <session>` | Continue once using saved continuation credentials and update the private session |
 | `open-payments grant cancel <session>` | Cancel using saved continuation credentials and mark the private session cancelled |
 | `open-payments token rotate <session>` | Rotate the issued access token and save its replacement in the private grant session |
+| `open-payments token revoke <session>` | Revoke the issued access token and remove it from the private grant session |
 | `open-payments pointer resolve <pointer>` | Convert a quoted payment pointer to a URL offline |
 | `open-payments pointer resolve <pointer> --json` | Return the resolved URL in a JSON `url` field |
 
@@ -568,8 +569,8 @@ output reports `Grant pending` or `Grant approved`; `--json` returns only
 keep tokens, response extensions and callback nonces out of stdout. For a pending
 redirect interaction, the consent link is at `response.interact.redirect` inside
 the saved file. Use `grant continue` to verify the returned callback and resume.
-Use `grant cancel` to cancel the saved grant, or `token rotate` to replace an
-issued access token. Token revocation is a subsequent increment.
+Use `grant cancel` to cancel the saved grant, `token rotate` to replace an issued
+access token, or `token revoke` to revoke it.
 
 Argument/configuration errors return status 2; HTTP, transport, response-decoding
 and session-file failures return status 1. Diagnostics omit payload values,
@@ -737,6 +738,45 @@ markers. Ambiguous failures block further token/grant operations pending
 reconciliation; a post-response write failure can lose the replacement token
 while retaining the old in-flight record. Exit statuses are 0 for a saved
 rotation, 2 for invalid input/configuration, and 1 for operation/file failures.
+
+## Token revocation
+
+Revoke the latest issued token in a private grant session:
+
+```sh
+./open-payments token revoke '/absolute/private/directory/grant-session.json'
+./open-payments token revoke '/absolute/private/directory/another-session.json' --json
+```
+
+Identity, key configuration and private-file requirements are the same as for
+rotation. The command reads the current `response.access_token`, including its
+management URI and value after any rotation. `ACCESS_TOKEN`, resource-token files
+and callback arguments cannot replace it. A pending or subject-only grant has no
+issued token to revoke. Continuation wait intervals do not delay revocation.
+
+The SDK sends one signed, bodyless DELETE to the exact management URI and accepts
+HTTP 204. Local HTTP requires `--allow-http`; no discovery, redirect or automatic
+retry occurs. Text reports `Token revoked`; JSON returns only
+`{"status":"revoked","saved":true}`. On success the CLI atomically removes
+`response.access_token` and any rotation snapshot from the private file, records
+`token_revoked_at`, and changes its kind to `token-revocation`. The session remains
+`ready`, retaining grant continuation data, subject data, response extensions and
+the original receipt time. Repeat revocation or rotation fails because the issued
+token is absent. This operation does not update copies in environment variables,
+token files or backups; the server determines revocation's effect.
+
+The grant can still be cancelled or continued using its separate continuation
+credential. Continuing honors the original wait interval, can return a new issued
+token, and removes the old revocation timestamp when saving that new response.
+Token revocation does not cancel the grant.
+
+Revocation uses the shared exclusive session lock and durable in-flight marker.
+HTTP/transport failures and unexpected success statuses leave the session
+`uncertain` and block further session operations until reconciled. A failure to
+save after HTTP 204 leaves the old in-flight record even though the token may be
+revoked. No credentials or server bodies appear in diagnostics. Exit statuses are
+0 for saved revocation, 2 for invalid input/configuration, and 1 for operation or
+file failures.
 
 ## Development
 

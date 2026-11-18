@@ -25,7 +25,8 @@ defmodule OpenPaymentsSnippets.CLI do
     IncomingPayments,
     Keys,
     Quotes,
-    TokenRotation
+    TokenRotation,
+    TokenRevocation
   }
 
   @help """
@@ -50,6 +51,7 @@ defmodule OpenPaymentsSnippets.CLI do
     grant continue <session> Continue a saved grant once and update its private session
     grant cancel <session> Cancel a saved grant and mark its private session cancelled
     token rotate <session> Rotate the issued token in a private grant session
+    token revoke <session> Revoke the issued token and remove it from the private session
     pointer resolve <pointer> Convert a quoted payment pointer to a URL offline
 
   Options:
@@ -196,6 +198,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["grant", "cancel", session]), do: {:ok, {:grant, :cancel, session}}
   defp command(["token", "rotate"]), do: {:ok, {:token, :rotate, nil}}
   defp command(["token", "rotate", session]), do: {:ok, {:token, :rotate, session}}
+  defp command(["token", "revoke"]), do: {:ok, {:token, :revoke, nil}}
+  defp command(["token", "revoke", session]), do: {:ok, {:token, :revoke, session}}
   defp command(["pointer", "resolve"]), do: {:ok, {:pointer, :resolve, nil}}
   defp command(["pointer", "resolve", pointer]), do: {:ok, {:pointer, :resolve, pointer}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
@@ -206,7 +210,7 @@ defmodule OpenPaymentsSnippets.CLI do
   defp resource_command?({:grant, operation, _}) when operation in [:request, :continue, :cancel],
     do: true
 
-  defp resource_command?({:token, :rotate, _}), do: true
+  defp resource_command?({:token, operation, _}) when operation in [:rotate, :revoke], do: true
   defp resource_command?(_command), do: false
 
   defp signing_command?({:keys, _}), do: true
@@ -216,7 +220,9 @@ defmodule OpenPaymentsSnippets.CLI do
        when operation in [:request, :continue, :cancel],
        do: true
 
-  defp authenticated_command?({:token, :rotate, _}), do: true
+  defp authenticated_command?({:token, operation, _}) when operation in [:rotate, :revoke],
+    do: true
+
   defp authenticated_command?(command), do: resource_token_command?(command)
 
   defp resource_token_command?({:incoming, operation, _})
@@ -322,8 +328,15 @@ defmodule OpenPaymentsSnippets.CLI do
     print_session_result(result, options, "Grant")
   end
 
-  defp execute({:token, :rotate, session}, options),
-    do: print_session_result(TokenRotation.run(session, options), options, "Token")
+  defp execute({:token, operation, session}, options) when operation in [:rotate, :revoke] do
+    result =
+      case operation do
+        :rotate -> TokenRotation.run(session, options)
+        :revoke -> TokenRevocation.run(session, options)
+      end
+
+    print_session_result(result, options, "Token")
+  end
 
   defp execute({:pointer, :resolve, pointer}, _options) when pointer in [nil, ""] do
     argument_error("Supply a payment pointer, quoted with single quotes.")
