@@ -81,6 +81,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments incoming complete <url>` | Mark an incoming payment complete using one signed POST |
 | `open-payments incoming list [address]` | Discover a wallet and fetch one signed page of incoming payments |
 | `open-payments quote get <url>` | Fetch quote details using one signed resource-token request |
+| `open-payments quote create <file\|->` | Discover the sending wallet's resource server and submit one signed quote request |
 | `open-payments keys validate` | Validate an existing Ed25519 signing key offline |
 | `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
 | `open-payments keys public` | Export the configured key's public JWK as formatted JSON |
@@ -398,6 +399,56 @@ added. Nested `sharedSecret` fields in amount extensions are redacted.
 Missing/invalid URL, credentials or token files return status 2. HTTP, transport,
 signing and invalid-response errors return status 1 with safe diagnostics,
 omitting request tokens, private keys, file paths and server error bodies.
+
+## Quote creation
+
+Create a quote from a JSON file or stdin using a resource access token granting
+quote `create` permission on the sending wallet's resource server.
+
+```json
+{
+  "walletAddress": "https://wallet.example/sender",
+  "receiver": "https://payments.example/tenant/incoming-payments/receiver",
+  "method": "ilp",
+  "debitAmount": {"value": "1000", "assetCode": "USD", "assetScale": 2}
+}
+```
+
+`walletAddress`, `receiver` and `method` are required. Supply one of
+`debitAmount` or `receiveAmount` for a fixed-debit or fixed-receive quote.
+Omitting both requests an amount inferred by the server from the receiver's
+incoming payment. At most one amount is allowed. Amount values are decimal
+strings; explicit nulls and unknown top-level fields are rejected by the SDK.
+
+```sh
+./open-payments quote create '/absolute/path/to/quote-request.json' \
+  --access-token-file '/absolute/private/directory/create-quote-token.txt'
+cat '/absolute/path/to/quote-request.json' | ./open-payments quote create - \
+  --access-token-file '/absolute/private/directory/create-quote-token.txt' --json
+```
+
+Signing and token settings use the same rules as quote reads, including
+`ACCESS_TOKEN`, file precedence and key/wallet overrides. The explicit payload
+`walletAddress` selects the sending wallet for discovery and must be a full
+wallet URL. It can differ from the configured signing identity; `--wallet-address`
+changes that identity without rewriting the payload.
+
+The command validates the payload and client configuration, discovers the
+sending wallet unsigned, then asks the SDK to POST to its `resourceServer` with
+`/quotes` appended. Tenant paths and trailing slashes are preserved. Base URLs
+with queries are rejected. Local HTTP requires `--allow-http`. The receiver and
+amount fields are sent as supplied; receiver lookup, amount availability, asset
+compatibility and permission checks belong to the server.
+
+HTTP 201 returns a typed quote, displayed with the same SDK fields, decimal
+strings, optional expiry data and nested shared-secret redaction as quote reads.
+Default output is formatted JSON; `--json` produces compact JSON.
+
+Input/configuration/SDK validation failures return status 2; HTTP, transport,
+signing and invalid-response failures return 1 with safe diagnostics. Creation
+makes one signed POST after discovery, with no automatic retry, redirect or
+readback. A transport or invalid-response failure can occur after the server
+created a quote; review the outcome before manually submitting another request.
 
 ## Signing-key validation
 

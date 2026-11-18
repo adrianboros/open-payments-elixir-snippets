@@ -33,6 +33,7 @@ defmodule OpenPaymentsSnippets.CLI do
     incoming complete <url> Mark an incoming payment complete with a signed request
     incoming list [address] Discover a wallet and fetch one signed page of incoming payments
     quote get <url>     Fetch quote details with a signed resource-token request
+    quote create <file|-> Discover the sending wallet and create a quote
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
@@ -155,6 +156,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["incoming", "list", address]), do: {:ok, {:incoming, :list, address}}
   defp command(["quote", "get"]), do: {:ok, {:quote, :get, nil}}
   defp command(["quote", "get", url]), do: {:ok, {:quote, :get, url}}
+  defp command(["quote", "create"]), do: {:ok, {:quote, :create, nil}}
+  defp command(["quote", "create", source]), do: {:ok, {:quote, :create, source}}
   defp command(["keys", "validate"]), do: {:ok, {:keys, :validate}}
   defp command(["keys", "public"]), do: {:ok, {:keys, :public}}
   defp command(["grant", "validate"]), do: {:ok, {:grant, :validate, nil}}
@@ -181,7 +184,7 @@ defmodule OpenPaymentsSnippets.CLI do
        when operation in [:get, :create, :complete, :list],
        do: true
 
-  defp resource_token_command?({:quote, :get, _}), do: true
+  defp resource_token_command?({:quote, operation, _}) when operation in [:get, :create], do: true
 
   defp resource_token_command?(_command), do: false
 
@@ -213,6 +216,9 @@ defmodule OpenPaymentsSnippets.CLI do
     do: print_resource_result(IncomingPayments.list(address, options), options)
 
   defp execute({:quote, :get, url}, options), do: get_resource(:get_quote, url, options)
+
+  defp execute({:quote, :create, source}, options),
+    do: print_resource_result(Quotes.create(source, options), options)
 
   defp execute({:keys, operation}, options) do
     outcome =
@@ -459,6 +465,10 @@ defmodule OpenPaymentsSnippets.CLI do
     "Invalid quote URL or resource access token. Use a full HTTPS resource URL; local HTTP requires --allow-http."
   end
 
+  defp resource_error(%Error{kind: :validation, operation: :create_quote}) do
+    "Invalid quote request, resource-server URL, or resource access token."
+  end
+
   defp resource_error(%Error{kind: :validation}) do
     "Invalid wallet address. Use an HTTPS URL or payment pointer; local HTTP requires --allow-http."
   end
@@ -468,6 +478,14 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp resource_error(%Error{kind: :http, status: status} = error),
     do: "#{resource_label(error)} failed (HTTP #{status})."
+
+  defp resource_error(%Error{kind: :transport, operation: :create_quote}),
+    do:
+      "Quote creation failed due to a transport error. No automatic retry was made; the quote may have been created."
+
+  defp resource_error(%Error{kind: :decoding, operation: :create_quote}),
+    do:
+      "Quote creation returned an invalid response. No automatic retry was made; the quote may have been created."
 
   defp resource_error(%Error{kind: :transport, operation: :create_incoming_payment}),
     do:
@@ -510,6 +528,7 @@ defmodule OpenPaymentsSnippets.CLI do
     do: "Incoming-payment listing"
 
   defp resource_label(%Error{operation: :get_quote}), do: "Quote read"
+  defp resource_label(%Error{operation: :create_quote}), do: "Quote creation"
 
   defp resource_label(_error), do: "Wallet discovery"
 
