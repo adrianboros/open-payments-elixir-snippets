@@ -83,6 +83,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments quote get <url>` | Fetch quote details using one signed resource-token request |
 | `open-payments outgoing get <url>` | Fetch outgoing-payment details using one signed resource-token request |
 | `open-payments outgoing create <file\|->` | Discover the sending wallet's resource server and submit one signed payment request |
+| `open-payments outgoing list [address]` | Discover a wallet and fetch one signed page of outgoing payments |
 | `open-payments quote create <file\|->` | Discover the sending wallet's resource server and submit one signed quote request |
 | `open-payments keys validate` | Validate an existing Ed25519 signing key offline |
 | `open-payments keys validate --json` | Validation summary with `valid` and `key_id` fields |
@@ -354,7 +355,7 @@ URL containing a query is rejected; local HTTP requires `--allow-http`.
 `--first` and `--last` are mutually exclusive integer counts from 1 through 100.
 `--cursor` is an opaque nonempty string, preserved and encoded by the SDK. It can
 be supplied alone or with a count. No page size, direction or cursor is defaulted
-when flags are omitted. Pagination flags apply only to `incoming list`.
+when flags are omitted. Pagination flags apply to `incoming list` and `outgoing list`.
 
 The result contains SDK `pagination` metadata and a `result` array. Empty pages,
 item order and duplicates are retained. Default output is formatted JSON;
@@ -492,6 +493,44 @@ partial output, credentials, key paths or server bodies. Redirects and automatic
 retries are disabled. A lost or invalid response can follow successful creation
 or payment processing; reconcile that outcome before manually repeating the
 command, since repetition can create another payment.
+
+## Outgoing-payment listing
+
+Fetch one page with an issued resource token granting outgoing-payment `list`
+permission. The optional address accepts a wallet URL or quoted payment pointer;
+it defaults to the configured signing wallet. An explicit list address selects
+the wallet to discover without changing the signing identity.
+
+```sh
+./open-payments outgoing list --first 10 \
+  --access-token-file '/absolute/private/directory/outgoing-token.txt'
+./open-payments outgoing list '$wallet.example/sender' --last 10 \
+  --cursor 'opaque-cursor' --access-token-file '/absolute/private/directory/outgoing-token.txt' --json
+```
+
+The command discovers that wallet unsigned and uses its returned ID as the wallet
+filter and `resourceServer` as the collection base. The SDK appends
+`/outgoing-payments`, encodes the wallet filter and pagination before signing one
+bodyless GET. Tenant paths and trailing slashes are preserved. Base URLs with
+queries are rejected; local HTTP requires `--allow-http`.
+
+Pagination uses the same rules as incoming listing: choose `--first` or `--last`
+(1–100), with an optional opaque nonempty `--cursor`. A cursor alone is supported.
+No count, direction or cursor is defaulted. Only one page is fetched, even if
+`hasNextPage` is true; choose the next request explicitly.
+
+Output contains SDK `pagination` metadata and an ordered `result` array, retaining
+empty pages and duplicates. Default JSON is formatted; `--json` is compact.
+Detailed items preserve all three amounts, optional fields and metadata. The SDK
+validates every item's schema and debit/sent consistency; invalid pages produce
+no partial output. Grant spent amounts belong to creation or the grant-spent
+endpoint and are not detailed list-item fields. Nested `sharedSecret` fields in
+amounts, metadata or page extensions are redacted.
+
+Signing and resource-token settings follow outgoing reads. Invalid input,
+configuration or pagination returns 2; HTTP, transport, signing and response
+failures return 1 with safe diagnostics. There is no retry, redirect, automatic
+page traversal or related-resource lookup.
 
 ## Quote creation
 

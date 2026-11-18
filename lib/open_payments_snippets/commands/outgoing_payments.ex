@@ -1,10 +1,16 @@
 defmodule OpenPaymentsSnippets.Commands.OutgoingPayments do
   @moduledoc false
 
-  alias OpenPayments.{Error, OutgoingPayment, WalletAddress}
-  alias OpenPayments.Types.{CreateOutgoingPayment, OutgoingPaymentWithSpentAmounts}
+  alias OpenPayments.{Client, Error, OutgoingPayment, WalletAddress}
+
+  alias OpenPayments.Types.{
+    CreateOutgoingPayment,
+    OutgoingPaymentPaginationResult,
+    OutgoingPaymentWithSpentAmounts
+  }
+
   alias OpenPayments.Types.OutgoingPayment, as: PaymentData
-  alias OpenPaymentsSnippets.{Config, Input}
+  alias OpenPaymentsSnippets.{Config, Input, PaginationOptions}
 
   @spec get(String.t(), keyword()) ::
           {:ok, PaymentData.t()} | {:error, Error.t() | String.t()}
@@ -12,6 +18,28 @@ defmodule OpenPaymentsSnippets.Commands.OutgoingPayments do
     with {:ok, token} <- Config.access_token(options),
          {:ok, client, _key} <- Config.authenticated_client(options) do
       OutgoingPayment.get(client, url, access_token: token)
+    end
+  end
+
+  @spec list(String.t() | nil, keyword()) ::
+          {:ok, OutgoingPaymentPaginationResult.t()} | {:error, Error.t() | String.t()}
+  def list(address, options) do
+    with {:ok, pagination} <- PaginationOptions.parse(options),
+         {:ok, token} <- Config.access_token(options),
+         {:ok, client, _key} <- Config.authenticated_client(options),
+         {:ok, wallet} <- WalletAddress.get(client, address || Client.wallet_address(client)) do
+      OutgoingPayment.list(
+        client,
+        wallet.resource_server,
+        wallet.id,
+        [access_token: token] ++ pagination
+      )
+    else
+      {:error, %Error{operation: nil} = error} ->
+        {:error, %{error | operation: :list_outgoing_payments}}
+
+      {:error, error} ->
+        {:error, error}
     end
   end
 

@@ -6,12 +6,11 @@ defmodule OpenPaymentsSnippets.Commands.IncomingPayments do
   alias OpenPayments.Types.{
     CreateIncomingPayment,
     IncomingPaymentPaginationResult,
-    IncomingPaymentWithMethods,
-    Pagination
+    IncomingPaymentWithMethods
   }
 
   alias OpenPayments.Types.IncomingPayment, as: IncomingPaymentData
-  alias OpenPaymentsSnippets.{Config, Input}
+  alias OpenPaymentsSnippets.{Config, Input, PaginationOptions}
 
   @spec get(String.t(), keyword()) ::
           {:ok, IncomingPaymentWithMethods.t()} | {:error, Error.t() | String.t()}
@@ -34,7 +33,7 @@ defmodule OpenPaymentsSnippets.Commands.IncomingPayments do
   @spec list(String.t() | nil, keyword()) ::
           {:ok, IncomingPaymentPaginationResult.t()} | {:error, Error.t() | String.t()}
   def list(address, options) do
-    with {:ok, pagination} <- pagination_options(options),
+    with {:ok, pagination} <- PaginationOptions.parse(options),
          {:ok, token} <- Config.access_token(options),
          {:ok, client, _key} <- Config.authenticated_client(options),
          {:ok, wallet} <- WalletAddress.get(client, address || Client.wallet_address(client)) do
@@ -50,19 +49,6 @@ defmodule OpenPaymentsSnippets.Commands.IncomingPayments do
 
       {:error, error} ->
         {:error, error}
-    end
-  end
-
-  defp pagination_options(options) do
-    data =
-      for {key, value} <- Keyword.take(options, [:first, :last, :cursor]),
-          into: %{},
-          do: {Atom.to_string(key), value}
-
-    if map_size(data) == 0 do
-      {:ok, []}
-    else
-      with {:ok, pagination} <- Pagination.from_map(data), do: {:ok, [pagination: pagination]}
     end
   end
 
