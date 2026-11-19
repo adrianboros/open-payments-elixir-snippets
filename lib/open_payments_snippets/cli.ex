@@ -30,6 +30,7 @@ defmodule OpenPaymentsSnippets.CLI do
     OutgoingPayments,
     PaymentAuthorization,
     PaymentPreparation,
+    PaymentQuote,
     PaymentStart,
     Keys,
     Quotes,
@@ -59,6 +60,7 @@ defmodule OpenPaymentsSnippets.CLI do
     payment start <file|-> Discover wallets and save initial receiver authorization
     payment prepare <session> Create and save an incoming payment using receiver authorization
     payment authorize <session> <file|-> Request bounded sender authorization for the saved payment
+    payment quote <session> Create and save a quote using the issued sender token
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
@@ -232,6 +234,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["payment", "start", source]), do: {:ok, {:payment, :start, source}}
   defp command(["payment", "prepare"]), do: {:ok, {:payment, :prepare, nil}}
   defp command(["payment", "prepare", session]), do: {:ok, {:payment, :prepare, session}}
+  defp command(["payment", "quote"]), do: {:ok, {:payment, :quote, nil}}
+  defp command(["payment", "quote", session]), do: {:ok, {:payment, :quote, session}}
   defp command(["payment", "authorize"]), do: {:ok, {:payment, :authorize, nil, nil}}
   defp command(["payment", "authorize", session]), do: {:ok, {:payment, :authorize, session, nil}}
 
@@ -250,7 +254,10 @@ defmodule OpenPaymentsSnippets.CLI do
     do: true
 
   defp resource_command?({:token, operation, _}) when operation in [:rotate, :revoke], do: true
-  defp resource_command?({:payment, operation, _}) when operation in [:start, :prepare], do: true
+
+  defp resource_command?({:payment, operation, _}) when operation in [:start, :prepare, :quote],
+    do: true
+
   defp resource_command?({:payment, :authorize, _, _}), do: true
   defp resource_command?(_command), do: false
 
@@ -264,8 +271,9 @@ defmodule OpenPaymentsSnippets.CLI do
   defp authenticated_command?({:token, operation, _}) when operation in [:rotate, :revoke],
     do: true
 
-  defp authenticated_command?({:payment, operation, _}) when operation in [:start, :prepare],
-    do: true
+  defp authenticated_command?({:payment, operation, _})
+       when operation in [:start, :prepare, :quote],
+       do: true
 
   defp authenticated_command?({:payment, :authorize, _, _}), do: true
 
@@ -415,6 +423,10 @@ defmodule OpenPaymentsSnippets.CLI do
     print_payment_result(PaymentPreparation.run(session, options), options)
   end
 
+  defp execute({:payment, :quote, session}, options) do
+    print_payment_result(PaymentQuote.run(session, options), options)
+  end
+
   defp execute({:payment, :authorize, session, source}, options) do
     print_payment_result(PaymentAuthorization.run(session, source, options), options)
   end
@@ -443,10 +455,7 @@ defmodule OpenPaymentsSnippets.CLI do
             Jason.encode!(result)
           else
             lines = [
-              if(result.stage in ["receiver-grant", "sender-grant"],
-                do: "Payment authorization #{result.status}",
-                else: "Incoming payment ready"
-              ),
+              payment_heading(result),
               "Stage  #{result.stage}",
               "Session  #{Jason.encode!(result.session)}"
             ]
@@ -459,6 +468,17 @@ defmodule OpenPaymentsSnippets.CLI do
             lines =
               if result[:incoming_payment_url],
                 do: lines ++ ["Incoming payment  #{Jason.encode!(result.incoming_payment_url)}"],
+                else: lines
+
+            lines =
+              if result[:quote_url],
+                do:
+                  lines ++
+                    [
+                      "Quote  #{Jason.encode!(result.quote_url)}",
+                      "Debit amount  #{Jason.encode!(result.debit_amount)}",
+                      "Receive amount  #{Jason.encode!(result.receive_amount)}"
+                    ],
                 else: lines
 
             Enum.join(lines, "\n")
@@ -475,6 +495,10 @@ defmodule OpenPaymentsSnippets.CLI do
         1
     end
   end
+
+  defp payment_heading(%{stage: "quote-ready"}), do: "Payment quote ready"
+  defp payment_heading(%{stage: "incoming-ready"}), do: "Incoming payment ready"
+  defp payment_heading(result), do: "Payment authorization #{result.status}"
 
   defp print_session_result(result, options, label) do
     case result do

@@ -100,6 +100,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments payment start <file\|-> --output <path>` | Discover sender and receiver wallets and save initial receiver authorization |
 | `open-payments payment prepare <session>` | Create one incoming payment with the saved receiver grant and retain its private result |
 | `open-payments payment authorize <session> <file\|->` | Request sender authorization with a debit limit bound to the saved incoming payment |
+| `open-payments payment quote <session>` | Create one fixed-receive quote using the saved sender grant and retain its private result |
 | `open-payments pointer resolve <pointer>` | Convert a quoted payment pointer to a URL offline |
 | `open-payments pointer resolve <pointer> --json` | Return the resolved URL in a JSON `url` field |
 
@@ -747,8 +748,8 @@ the server created a grant; review that outcome before submitting another reques
 `payment start` begins a payment by discovering both wallets and requesting a
 receiver grant with incoming-payment `create` and `read` permissions. This
 command stops at receiver authorization. Use `payment prepare` next to create
-the incoming payment, then `payment authorize` for sender authorization. Quoting
-and sending through `payment finish` remain planned.
+the incoming payment, then `payment authorize` for sender authorization and
+`payment quote` to obtain a quote. Sending through `payment finish` remains planned.
 
 Save a payment request as JSON:
 
@@ -851,7 +852,7 @@ the incoming payment. There are no automatic retries. Argument/configuration
 failures return status 2; operation/file failures return status 1.
 
 This step creates the receiver's incoming resource. Continue with sender
-authorization below; quotes and outgoing payments remain later flow steps.
+authorization below, then quote the payment. Outgoing creation remains a later step.
 
 ## Authorizing the sender
 
@@ -914,8 +915,55 @@ ambiguous response leaves the sender attempt `uncertain`, retaining the receiver
 record for reconciliation. Interruptions and save failures can leave an in-flight
 attempt. There are no automatic retries. Argument/configuration failures return
 status 2; HTTP, transport and file failures return status 1 with safe diagnostics.
-This command requests authorization; quote and outgoing creation remain later
-steps, with explicit confirmation required before the complete flow sends funds.
+This command requests authorization. Continue with `payment quote` after approval;
+outgoing creation remains a later step, with explicit confirmation required before
+the complete flow sends funds.
+
+## Quoting the saved payment
+
+Once sender authorization is approved, request a quote for the saved receive amount:
+
+```sh
+./open-payments payment quote '/absolute/private/directory/payment-session.json'
+./open-payments payment quote '/absolute/private/directory/payment-session.json' --json
+```
+
+The command uses the saved sender wallet ID, resource server, incoming-payment URL
+and original receive amount. It creates one ILP fixed-receive quote using the SDK
+and the latest issued sender token, including a replacement saved by `token rotate`.
+The debit limit from `payment authorize` remains a grant limit; the quote request
+uses `receiveAmount`. The SDK validates the payload and response, and the server
+calculates the debit amount, exchange rate and fees.
+
+Signing identity defaults to the session's recorded wallet and key IDs; explicit
+overrides must match. Supply the original private signing key through the usual
+configuration. `ACCESS_TOKEN` is unused. Resource-token, output, callback and
+pagination flags are rejected. Local HTTP requires `--allow-http`. Pending,
+wait-only or revoked sender grants cannot create a new quote.
+
+There is one signed POST to the sender's quotes collection, with no discovery or
+readback requests. Success saves the full SDK response at `payment.quote` in the
+same private `0600` session and advances its stage to `quote-ready`. Sender grant,
+callback verification, token rotation, receiver grant and incoming-payment data
+are preserved. Earlier preparation and authorization commands can still return
+their saved results without changing the quote.
+
+Text output reports the quote URL and debit/receive amounts. `--json` returns
+`status: "ready"`, `stage: "quote-ready"`, `saved: true`, `session`, `quote_url`,
+`debit_amount` and `receive_amount`. Displayed amounts contain only `value`,
+`assetCode` and `assetScale`; additional amount fields remain in the private file.
+Repeating the command returns the saved quote with `saved: false`, leaves the file
+unchanged and makes no request, including after token revocation. This is a saved
+snapshot; expiry data is preserved as returned by the SDK, without automatic
+refresh or replacement. A damaged saved quote is rejected.
+
+The shared session lock and durable in-flight marker protect creation. Known
+preflight failures restore the original ready sender session. HTTP, transport or
+invalid-response failures leave it `uncertain`; interruptions or save failures
+can leave an in-flight attempt. Reconcile these outcomes before continuing,
+because the server may already have created the quote. There are no automatic
+retries. Argument/configuration failures return status 2; operation/file failures
+return status 1 with safe diagnostics. This step creates a quote and sends no funds.
 
 ## Grant continuation and callbacks
 
