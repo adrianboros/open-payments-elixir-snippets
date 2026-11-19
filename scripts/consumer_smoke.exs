@@ -41,7 +41,7 @@ defmodule ExecutableConsumerTest do
   test "help includes the complete staged flow from outside the checkout" do
     assert {stdout, "", 0} = run(["help"])
 
-    for command <- ~w(start prepare authorize quote finish),
+    for command <- ~w(start prepare authorize quote finish initialize finalize),
         do: assert(stdout =~ "payment #{command}")
 
     assert stdout =~ "--yes"

@@ -16,14 +16,24 @@ defmodule OpenPaymentsSnippets.Commands.PaymentStart do
 
   @spec run(String.t() | nil, keyword()) :: {:ok, map()} | {:error, term()}
   def run(source, options) do
+    with {:ok, _output} <- output(options[:output]),
+         {:ok, data} <- Input.json(source, "payment request") do
+      from_map(data, options)
+    else
+      {:error, message} -> invalid(message)
+    end
+  end
+
+  @spec from_map(map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def from_map(data, options) do
     with {:ok, output} <- output(options[:output]),
-         {:ok, data} <- Input.json(source, "payment request"),
          {:ok, incoming, finish} <- intent(data),
          {:ok, client, key} <- Config.authenticated_client(options) do
-      GrantSession.create(output, fn path -> discover(path, client, key, incoming, finish) end)
+      GrantSession.create(output, fn path ->
+        discover(path, client, key, incoming, finish, options[:scenario])
+      end)
     else
-      {:error, message} ->
-        invalid(message)
+      {:error, message} -> invalid(message)
     end
   end
 
@@ -62,7 +72,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentStart do
       else: request
   end
 
-  defp discover(path, client, key, incoming, finish) do
+  defp discover(path, client, key, incoming, finish, scenario) do
     with {:ok, sender} <- WalletAddress.get(client, Client.wallet_address(client)),
          {:ok, receiver} <- WalletAddress.get(client, incoming.wallet_address),
          {:ok, request} <-
@@ -105,6 +115,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentStart do
         }
       }
 
+      session = if scenario, do: put_in(session, ["payment", "scenario"], scenario), else: session
       request(path, client, request, session)
     else
       {:error, %Error{} = error} ->

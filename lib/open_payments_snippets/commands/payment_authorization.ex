@@ -18,8 +18,16 @@ defmodule OpenPaymentsSnippets.Commands.PaymentAuthorization do
     do: invalid("Supply a private payment-session file.")
 
   def run(path, source, options) do
-    with {:ok, data} <- Input.json(source, "sender authorization"),
-         {:ok, intent, finish} <- intent(data) do
+    with {:ok, data} <- Input.json(source, "sender authorization") do
+      from_map(path, data, options)
+    else
+      {:error, message} -> invalid(message)
+    end
+  end
+
+  @spec from_map(String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def from_map(path, data, options) do
+    with {:ok, intent, finish} <- decode_input(data) do
       GrantSession.transaction(path, fn path, session ->
         with {:ok, response, _received} <- GrantSession.validate(session),
              {:ok, payment, _request, sender, _receiver} <- PaymentSession.context(session),
@@ -39,7 +47,8 @@ defmodule OpenPaymentsSnippets.Commands.PaymentAuthorization do
     end
   end
 
-  defp intent(data) when is_map(data) do
+  @spec decode_input(term()) :: {:ok, map(), InteractionFinish.t()} | {:error, String.t()}
+  def decode_input(data) when is_map(data) do
     with true <- map_size(Map.drop(data, ~w(debitAmount finishUri))) == 0,
          {:ok, amount} <- Amount.from_map(data["debitAmount"]),
          {:ok, finish} <-
@@ -54,7 +63,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentAuthorization do
     end
   end
 
-  defp intent(_data), do: {:error, "Sender authorization must be a JSON object."}
+  def decode_input(_data), do: {:error, "Sender authorization must be a JSON object."}
 
   defp incoming(%{"stage" => stage} = payment)
        when stage in ["incoming-ready", "sender-grant", "quote-ready", "outgoing-created"] do

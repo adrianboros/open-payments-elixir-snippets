@@ -9,6 +9,7 @@ defmodule OpenPaymentsSnippets.Commands.GrantContinuation do
   def run(path, options) do
     GrantSession.transaction(path, fn path, session ->
       with {:ok, response, received} <- GrantSession.validate(session),
+           :ok <- pending_only(response, options),
            {:ok, client, key} <- GrantSession.client(session, options),
            :ok <- ready_time(response.continue.wait, received),
            {:ok, payload, verified?} <- GrantCallback.payload(session, response, options) do
@@ -18,6 +19,15 @@ defmodule OpenPaymentsSnippets.Commands.GrantContinuation do
         error -> error
       end
     end)
+  end
+
+  defp pending_only(%{access_token: token}, options) do
+    if options[:pending_only] == true and not is_nil(token),
+      do:
+        invalid(
+          "The grant is no longer pending. Resume the macro again; no continuation was sent."
+        ),
+      else: :ok
   end
 
   defp ready_time(wait, received) do

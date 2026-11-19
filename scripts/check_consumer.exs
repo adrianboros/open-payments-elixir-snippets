@@ -48,7 +48,8 @@ defmodule ConsumerCheck do
           "--only",
           "consumer_flow",
           "test/open_payments_snippets/payment_flow_test.exs",
-          "test/open_payments_snippets/payment_finish_test.exs"
+          "test/open_payments_snippets/payment_finish_test.exs",
+          "test/open_payments_snippets/payment_macros_test.exs"
         ],
         cli,
         List.keystore(

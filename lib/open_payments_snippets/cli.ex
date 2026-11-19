@@ -30,6 +30,7 @@ defmodule OpenPaymentsSnippets.CLI do
     OutgoingPayments,
     PaymentAuthorization,
     PaymentFinish,
+    PaymentMacros,
     PaymentPreparation,
     PaymentQuote,
     PaymentStart,
@@ -63,6 +64,8 @@ defmodule OpenPaymentsSnippets.CLI do
     payment authorize <session> <file|-> Request bounded sender authorization for the saved payment
     payment quote <session> Create and save a quote using the issued sender token
     payment finish <session> Confirm and create one outgoing payment using the saved quote
+    payment initialize <file|-> Run discovery, receiver setup and sender authorization through quote readiness
+    payment finalize <session|-> Resume consent and run the remaining steps through confirmed outgoing creation
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
@@ -83,13 +86,13 @@ defmodule OpenPaymentsSnippets.CLI do
     --jwks              Export a key set with keys public
     --wallet-address <address> Override WALLET_ADDRESS for authenticated requests
     --access-token-file <path> Read a resource token, overriding ACCESS_TOKEN
-    --output <path>     Save grant request/payment start state to a new private file
+    --output <path>     Save grant request/payment start/initialize state to a new private file
     --first <count>     Request 1-100 items forward with incoming/outgoing list
     --last <count>      Request 1-100 items backward with incoming/outgoing list
     --cursor <value>    Supply an opaque pagination cursor with incoming/outgoing list
-    --callback-file <path|-> Read the returned callback URL for grant continue
+    --callback-file <path|-> Read the returned callback URL for grant continue/payment finalize
     --hash-encoding <profile> Callback hash encoding: base64 (default) or base64url
-    --yes               Confirm new outgoing creation with payment finish
+    --yes               Confirm new outgoing creation with payment finish/finalize
 
   Wallet address defaults to the WALLET_ADDRESS environment variable.
 
@@ -138,8 +141,8 @@ defmodule OpenPaymentsSnippets.CLI do
         options[:version] && is_tuple(command) ->
           argument_error("The --version option cannot be combined with another command.")
 
-        Keyword.has_key?(options, :yes) && not match?({:payment, :finish, _}, command) ->
-          argument_error("The --yes option requires payment finish.")
+        Keyword.has_key?(options, :yes) && not confirmation_command?(command) ->
+          argument_error("The --yes option requires payment finish or payment finalize.")
 
         Keyword.has_key?(options, :allow_http) && not resource_command?(command) ->
           argument_error("The --allow-http option requires a resource command.")
@@ -150,7 +153,9 @@ defmodule OpenPaymentsSnippets.CLI do
 
         Keyword.has_key?(options, :output) &&
             not output_command?(command) ->
-          argument_error("The --output option requires grant request or payment start.")
+          argument_error(
+            "The --output option requires grant request, payment start or payment initialize."
+          )
 
         Keyword.has_key?(options, :wallet_address) && not authenticated_command?(command) ->
           argument_error("The --wallet-address option requires an authenticated request.")
@@ -168,8 +173,8 @@ defmodule OpenPaymentsSnippets.CLI do
           argument_error("Pagination options require incoming list or outgoing list.")
 
         Enum.any?([:callback_file, :hash_encoding], &Keyword.has_key?(options, &1)) &&
-            not match?({:grant, :continue, _}, command) ->
-          argument_error("Callback options require grant continue.")
+            not callback_command?(command) ->
+          argument_error("Callback options require grant continue or payment finalize.")
 
         options[:hash_encoding] not in [nil, "base64", "base64url"] ->
           argument_error("Hash encoding must be base64 or base64url.")
@@ -245,6 +250,11 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["payment", "quote", session]), do: {:ok, {:payment, :quote, session}}
   defp command(["payment", "finish"]), do: {:ok, {:payment, :finish, nil}}
   defp command(["payment", "finish", session]), do: {:ok, {:payment, :finish, session}}
+  defp command(["payment", "initialize"]), do: {:ok, {:payment, :initialize, nil}}
+  defp command(["payment", "initialize", source]), do: {:ok, {:payment, :initialize, source}}
+  defp command(["payment", "finalize"]), do: {:ok, {:payment, :finalize, nil}}
+  defp command(["payment", "finalize", target]), do: {:ok, {:payment, :finalize, target}}
+
   defp command(["payment", "authorize"]), do: {:ok, {:payment, :authorize, nil, nil}}
   defp command(["payment", "authorize", session]), do: {:ok, {:payment, :authorize, session, nil}}
 
@@ -265,7 +275,7 @@ defmodule OpenPaymentsSnippets.CLI do
   defp resource_command?({:token, operation, _}) when operation in [:rotate, :revoke], do: true
 
   defp resource_command?({:payment, operation, _})
-       when operation in [:start, :prepare, :quote, :finish],
+       when operation in [:start, :prepare, :quote, :finish, :initialize, :finalize],
        do: true
 
   defp resource_command?({:payment, :authorize, _, _}), do: true
@@ -282,7 +292,7 @@ defmodule OpenPaymentsSnippets.CLI do
     do: true
 
   defp authenticated_command?({:payment, operation, _})
-       when operation in [:start, :prepare, :quote, :finish],
+       when operation in [:start, :prepare, :quote, :finish, :initialize, :finalize],
        do: true
 
   defp authenticated_command?({:payment, :authorize, _, _}), do: true
@@ -306,7 +316,16 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp output_command?({:grant, :request, _}), do: true
   defp output_command?({:payment, :start, _}), do: true
+  defp output_command?({:payment, :initialize, _}), do: true
   defp output_command?(_command), do: false
+
+  defp confirmation_command?({:payment, operation, _}) when operation in [:finish, :finalize],
+    do: true
+
+  defp confirmation_command?(_command), do: false
+  defp callback_command?({:grant, :continue, _}), do: true
+  defp callback_command?({:payment, :finalize, _}), do: true
+  defp callback_command?(_command), do: false
 
   defp execute(:default, options) do
     command = if options[:version], do: :version, else: :help
@@ -441,6 +460,14 @@ defmodule OpenPaymentsSnippets.CLI do
     print_payment_result(PaymentFinish.run(session, options), options)
   end
 
+  defp execute({:payment, :initialize, source}, options) do
+    print_payment_result(PaymentMacros.initialize(source, options), options)
+  end
+
+  defp execute({:payment, :finalize, target}, options) do
+    print_payment_result(PaymentMacros.finalize(target, options), options)
+  end
+
   defp execute({:payment, :authorize, session, source}, options) do
     print_payment_result(PaymentAuthorization.run(session, source, options), options)
   end
@@ -506,6 +533,25 @@ defmodule OpenPaymentsSnippets.CLI do
                       "Receive amount  #{Jason.encode!(result.receive_amount)}",
                       "Sent amount  #{Jason.encode!(result.sent_amount)}"
                     ],
+                else: lines
+
+            lines =
+              if result[:steps],
+                do:
+                  lines ++
+                    [
+                      "Steps  " <>
+                        Enum.map_join(
+                          result.steps,
+                          " -> ",
+                          &(&1.command <> " (" <> &1.status <> ")")
+                        )
+                    ],
+                else: lines
+
+            lines =
+              if result[:wait_seconds],
+                do: lines ++ ["Wait  #{result.wait_seconds} seconds before resuming."],
                 else: lines
 
             Enum.join(lines, "\n")

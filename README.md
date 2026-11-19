@@ -104,6 +104,8 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments payment quote <session>` | Create one fixed-receive quote using the saved sender grant and retain its private result |
 | `open-payments payment finish <session>` | Confirm and create one outgoing payment from the saved quote |
 | `open-payments payment finish <session> --yes --json` | Explicitly approve outgoing creation for automation and return its saved result |
+| `open-payments payment initialize <file\|-> --output <path>` | Run discovery and payment setup through consent or quote readiness |
+| `open-payments payment finalize <session\|->` | Resume consent and run remaining steps through confirmed outgoing creation |
 | `open-payments pointer resolve <pointer>` | Convert a quoted payment pointer to a URL offline |
 | `open-payments pointer resolve <pointer> --json` | Return the resolved URL in a JSON `url` field |
 
@@ -746,6 +748,92 @@ key paths, tokens and server error bodies. Failed operations remove the newly
 created file. A transport, decoding or post-response save failure can happen after
 the server created a grant; review that outcome before submitting another request.
 
+## Payment macros and JSON pipelines
+
+`payment initialize` and `payment finalize` combine multiple Open Payments steps
+to set up and finish a payment quickly. They use a private session to save progress
+and resume when wallet consent is required.
+
+Save this combined request as `macro.json`:
+
+```json
+{
+  "receiver": "$wallet.example/receiver",
+  "receiveAmount": {"value": "100", "assetCode": "EUR", "assetScale": 2},
+  "finishUri": "https://client.example/return?state=receiver",
+  "metadata": {"description": "Example macro payment"},
+  "senderAuthorization": {
+    "debitAmount": {"value": "200", "assetCode": "USD", "assetScale": 2},
+    "finishUri": "https://client.example/return?state=sender"
+  }
+}
+```
+
+The outer fields are the `payment start` input; `metadata` is optional. The required
+`senderAuthorization` contains the debit limit and callback for `payment authorize`.
+Use callback URIs you control. The SDK validates protocol payloads, and the server
+enforces grant permissions, limits and quote validity.
+
+```sh
+./open-payments payment initialize macro.json \
+  --output '/absolute/private/directory/macro-session.json' --json
+```
+
+Initialization runs wallet discovery, receiver authorization, incoming creation,
+sender authorization and quote creation as far as authorization permits. It stops
+at either consent boundary or at `quote-ready`. A pending result contains the
+consent URL. The combined intent is saved privately before the first grant request,
+so later invocations resume from the recorded stage. Initialization requires a new
+output path; it never creates an outgoing payment.
+
+Visit the returned consent URL, then save its full callback URL in a file:
+
+```sh
+./open-payments payment finalize '/absolute/private/directory/macro-session.json' \
+  --callback-file '/absolute/private/directory/callback.txt'
+```
+
+Finalization verifies the callback through the existing grant continuation step,
+then runs the remaining setup, quote and outgoing steps. Receiver and sender
+consent may require two separate invocations with their respective callbacks.
+Without a required callback, it returns the pending descriptor and consent URL
+without making a continuation request. A server wait returns `waiting` and
+`wait_seconds`; a wait-only continuation stops after one call. Resume explicitly
+when ready. Before outgoing creation, type `send` at the preview or use `--yes`.
+New JSON-mode outgoing creation requires `--yes`.
+
+JSON results include `scenario: "quote-payment"`, the private `session` path and
+`steps` with command/status/save summaries. `saved` reports whether any step saved
+progress during that invocation. Tokens, nonces and raw responses stay in the
+private session. Each step uses the existing locks, atomic saves and uncertainty
+markers; a failed or interrupted mutation requires reconciliation before resuming.
+There are no automatic retries or background polling. Repeated successful
+finalization returns the saved outgoing result without another submission.
+
+The initializer's JSON descriptor can be piped directly into finalization:
+
+```sh
+cat macro.json | ./open-payments payment initialize - \
+  --output '/absolute/private/directory/piped-session.json' --json \
+  | ./open-payments payment finalize - --yes --json
+```
+
+This executes real Open Payments calls against the configured wallets, including
+outgoing creation when authorization is ready and `--yes` is supplied. Pending
+consent returns a descriptor for a later resume. With a session path argument,
+`--callback-file -` reads the callback from stdin. A descriptor and callback cannot
+both use stdin; supply one as a file. Normal signing and `--allow-http` settings
+apply to each invocation.
+
+| Scenario | Input and behavior |
+| --- | --- |
+| Self-payment | Set `receiver` to the configured wallet and use its asset; both grants remain separately recorded |
+| Cross-wallet or cross-asset payment | Set a different receiver and its receive amount, with the sender's debit limit |
+| Interactive authorization | Resume once for each returned consent URL; callbacks remain bound to the correct grant |
+
+The individual staged commands remain available for inspecting and testing each
+operation separately. The macros use the same SDK-backed implementations.
+
 ## Starting payment authorization
 
 `payment start` begins a payment by discovering both wallets and requesting a
@@ -990,7 +1078,7 @@ For automation, `--yes` explicitly confirms creation from this saved quote:
 ```
 
 New creation with `--json` requires `--yes`, which skips the prompt. The flag is
-accepted only by `payment finish`. Review the saved quote before invoking this
+accepted by `payment finish` and `payment finalize`. Review the saved quote before invoking this
 form: it authorizes submission of that outgoing payment. The server enforces quote
 validity, grant permissions and limits; the CLI preserves returned expiry data.
 
@@ -1259,6 +1347,13 @@ asserts the exact request count to catch unexpected retries or hidden requests.
 All services and payment progress are simulated locally using a public test key;
 no provider credentials or funded wallet are required.
 
+The macro tests cover cross-asset payments, self-payments, independent consent
+callbacks, server waits, confirmation, saved-step reuse and interrupted operations:
+
+```sh
+mix test test/open_payments_snippets/payment_macros_test.exs
+```
+
 ## Isolated consumer check
 
 Build a production executable and run the CLI against a clean, committed SDK
@@ -1274,7 +1369,7 @@ The default exports the sibling SDK's committed `HEAD` and prints its full commi
 ID. Select another local checkout or an available commit explicitly with
 `--sdk-path <directory>` and `--sdk-ref <revision>`. The check copies CLI source,
 tests and the lockfile, builds dependencies from scratch, compiles a production
-escript, runs `mix check`, then performs seven executable smoke tests and three
+escript, runs `mix check`, then performs seven executable smoke tests and six
 complete executable flows. Each subprocess runs outside the checkout with real
 stdin and separate stdout/stderr capture. Environment wallet credentials are
 cleared before testing; flow tests supply public keys and local simulated servers.
@@ -1282,8 +1377,10 @@ The temporary SDK, CLI copy and build output are removed afterward.
 
 The smoke tests cover help/version, payment pointers, key loading/export, UTF-8
 stdin, error exits and production archive contents. The executable flows cover
-both low-level payment variants and the staged flow through confirmed outgoing
-creation, token rotation/revocation and grant cancellation. Normal `mix test`
+both low-level payment variants, the staged flow through confirmed outgoing
+creation, and the macros with immediate grants, separate consent callbacks and
+a real self-payment shell pipeline. They also exercise token rotation/revocation
+and grant cancellation. Normal `mix test`
 continues to run those scenarios through the testable CLI runner.
 
 For an environment without Git, provide a source archive exported beforehand:
@@ -1299,14 +1396,14 @@ Archive mode prints the archive's SHA256. Use a known committed revision when
 exporting it to reproduce a particular SDK snapshot. Offline mode requires the
 locked dependencies and Hex tooling to be cached already.
 
-Verified with SDK commit `e63ebe161d10a24a49b97aaed6871bf8e818b5c2`:
+Verified with SDK commit `8d31b6f9ee7efab5b38601212b3ebc62841fed7c`:
 
 | Runtime | Isolated result |
 | --- | --- |
-| Linux Elixir 1.17.3 / OTP 26 | 334 runner tests, 7 executable smoke tests and 3 executable flows |
+| Linux Elixir 1.17.3 / OTP 26 | 350 runner tests, 7 executable smoke tests and 6 executable flows |
 | Linux Elixir 1.19.7 / OTP 28 | Same checks pass |
 | Linux Elixir 1.20.5 / OTP 29 | Same checks pass |
-| macOS Elixir 1.20.4 / OTP 29 | Same checks pass using the default Git export |
+| macOS Elixir 1.20.4 / OTP 29 | Same checks pass using an explicit Git export |
 
 The Linux checks used cached images with networking disabled and source mounts
 read-only. Fresh Elixir 1.20 builds emit two existing `message_signatures`
@@ -1318,7 +1415,7 @@ live authenticated-provider verification remain pending.
 [The CI workflow](.github/workflows/ci.yml) runs on pushes, pull requests and manual
 dispatch. Its Ubuntu 24.04 matrix covers Elixir/OTP 1.17/26, 1.19/28 and 1.20/29.
 Each job runs the isolated consumer check, including production executable build,
-334 runner tests, seven executable smoke tests and three complete executable flows.
+350 runner tests, seven executable smoke tests and six complete executable flows.
 
 CI checks out the public SDK at
 [`8d31b6f9ee7efab5b38601212b3ebc62841fed7c`](https://github.com/interledger/open-payments-elixir/commit/8d31b6f9ee7efab5b38601212b3ebc62841fed7c).
