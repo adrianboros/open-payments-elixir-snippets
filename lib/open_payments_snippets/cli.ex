@@ -28,6 +28,7 @@ defmodule OpenPaymentsSnippets.CLI do
     Grants,
     IncomingPayments,
     OutgoingPayments,
+    PaymentStart,
     Keys,
     Quotes,
     TokenRotation,
@@ -53,6 +54,7 @@ defmodule OpenPaymentsSnippets.CLI do
     outgoing create <file|-> Discover the sending wallet and create an outgoing payment
     outgoing list [address] Discover a wallet and fetch one signed page of outgoing payments
     outgoing grant-spent-amounts [address] Read the resource token's current grant spent amounts
+    payment start <file|-> Discover wallets and save initial receiver authorization
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
@@ -73,7 +75,7 @@ defmodule OpenPaymentsSnippets.CLI do
     --jwks              Export a key set with keys public
     --wallet-address <address> Override WALLET_ADDRESS for authenticated requests
     --access-token-file <path> Read a resource token, overriding ACCESS_TOKEN
-    --output <path>     Save grant request state and secrets to a new private file
+    --output <path>     Save grant request/payment start state to a new private file
     --first <count>     Request 1-100 items forward with incoming/outgoing list
     --last <count>      Request 1-100 items backward with incoming/outgoing list
     --cursor <value>    Supply an opaque pagination cursor with incoming/outgoing list
@@ -134,8 +136,8 @@ defmodule OpenPaymentsSnippets.CLI do
           argument_error("Signing-key options require a key command or authenticated request.")
 
         Keyword.has_key?(options, :output) &&
-            not match?({:grant, :request, _}, command) ->
-          argument_error("The --output option requires grant request.")
+            not output_command?(command) ->
+          argument_error("The --output option requires grant request or payment start.")
 
         Keyword.has_key?(options, :wallet_address) && not authenticated_command?(command) ->
           argument_error("The --wallet-address option requires an authenticated request.")
@@ -222,6 +224,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["token", "rotate", session]), do: {:ok, {:token, :rotate, session}}
   defp command(["token", "revoke"]), do: {:ok, {:token, :revoke, nil}}
   defp command(["token", "revoke", session]), do: {:ok, {:token, :revoke, session}}
+  defp command(["payment", "start"]), do: {:ok, {:payment, :start, nil}}
+  defp command(["payment", "start", source]), do: {:ok, {:payment, :start, source}}
   defp command(["pointer", "resolve"]), do: {:ok, {:pointer, :resolve, nil}}
   defp command(["pointer", "resolve", pointer]), do: {:ok, {:pointer, :resolve, pointer}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
@@ -234,6 +238,7 @@ defmodule OpenPaymentsSnippets.CLI do
     do: true
 
   defp resource_command?({:token, operation, _}) when operation in [:rotate, :revoke], do: true
+  defp resource_command?({:payment, :start, _}), do: true
   defp resource_command?(_command), do: false
 
   defp signing_command?({:keys, _}), do: true
@@ -246,6 +251,7 @@ defmodule OpenPaymentsSnippets.CLI do
   defp authenticated_command?({:token, operation, _}) when operation in [:rotate, :revoke],
     do: true
 
+  defp authenticated_command?({:payment, :start, _}), do: true
   defp authenticated_command?(command), do: resource_token_command?(command)
 
   defp resource_token_command?({:incoming, operation, _})
@@ -262,6 +268,10 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp list_command?({group, :list, _}) when group in [:incoming, :outgoing], do: true
   defp list_command?(_command), do: false
+
+  defp output_command?({:grant, :request, _}), do: true
+  defp output_command?({:payment, :start, _}), do: true
+  defp output_command?(_command), do: false
 
   defp execute(:default, options) do
     command = if options[:version], do: :version, else: :help
@@ -378,6 +388,39 @@ defmodule OpenPaymentsSnippets.CLI do
       end
 
     print_session_result(result, options, "Token")
+  end
+
+  defp execute({:payment, :start, source}, options) do
+    case PaymentStart.run(source, options) do
+      {:ok, result} ->
+        output =
+          if options[:json] do
+            Jason.encode!(result)
+          else
+            lines = [
+              "Payment authorization #{result.status}",
+              "Stage  #{result.stage}",
+              "Session  #{Jason.encode!(result.session)}"
+            ]
+
+            lines =
+              if result[:consent_url],
+                do: lines ++ ["Consent URL  #{Jason.encode!(result.consent_url)}"],
+                else: lines
+
+            Enum.join(lines, "\n")
+          end
+
+        IO.puts(output)
+        0
+
+      {:error, {:argument, message}} ->
+        argument_error(message)
+
+      {:error, {:operation, message}} ->
+        IO.puts(:stderr, "Error: #{message}")
+        1
+    end
   end
 
   defp execute({:pointer, :resolve, pointer}, _options) when pointer in [nil, ""] do

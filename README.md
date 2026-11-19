@@ -97,6 +97,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments grant cancel <session>` | Cancel using saved continuation credentials and mark the private session cancelled |
 | `open-payments token rotate <session>` | Rotate the issued access token and save its replacement in the private grant session |
 | `open-payments token revoke <session>` | Revoke the issued access token and remove it from the private grant session |
+| `open-payments payment start <file\|-> --output <path>` | Discover sender and receiver wallets and save initial receiver authorization |
 | `open-payments pointer resolve <pointer>` | Convert a quoted payment pointer to a URL offline |
 | `open-payments pointer resolve <pointer> --json` | Return the resolved URL in a JSON `url` field |
 
@@ -738,6 +739,69 @@ and session-file failures return status 1. Diagnostics omit payload values,
 key paths, tokens and server error bodies. Failed operations remove the newly
 created file. A transport, decoding or post-response save failure can happen after
 the server created a grant; review that outcome before submitting another request.
+
+## Starting payment authorization
+
+`payment start` begins a payment by discovering both wallets and requesting a
+receiver grant with incoming-payment `create` and `read` permissions. This
+increment stops at receiver authorization. Creating incoming payments, requesting
+sender authorization, quoting and sending through `payment finish` remain planned.
+
+Save a payment request as JSON:
+
+```json
+{
+  "receiver": "$wallet.example/receiver",
+  "receiveAmount": {"value": "100", "assetCode": "EUR", "assetScale": 2},
+  "finishUri": "https://client.example/return?state=your-session-state",
+  "metadata": {"description": "Example payment"}
+}
+```
+
+`receiver`, `receiveAmount` and `finishUri` are required; `metadata` is optional.
+Other fields are rejected. The receiver accepts a wallet URL or payment pointer.
+The SDK validates the amount and metadata using its incoming-payment model;
+`value` is an integer string in the receiver asset's smallest units. For EUR at
+scale 2, `"100"` means EUR 1.00. Supply a callback URI you control, with any session
+state included in its query. The CLI generates a fresh 32-byte interaction nonce.
+
+Load your signing settings and choose a new output path in an existing private
+directory outside the repository:
+
+```sh
+./open-payments payment start '/absolute/path/to/payment-request.json' \
+  --output '/absolute/private/directory/payment-session.json'
+cat '/absolute/path/to/payment-request.json' | ./open-payments payment start - \
+  --output '/absolute/private/directory/another-payment-session.json' --json
+```
+
+`WALLET_ADDRESS` identifies the sender and registered signing key's wallet;
+`--wallet-address`, `--key-id` and `--key-file` provide the usual overrides.
+Receiver discovery does not replace that client identity. `ACCESS_TOKEN` is unused
+and `--access-token-file` is rejected. Local HTTP requires `--allow-http`.
+
+The command performs two unsigned wallet GETs followed by one SDK-signed grant
+POST to the receiver's discovered authorization server. Success returns status 0
+and reports `pending` or `approved`, stage `receiver-grant`, and the private
+session path. Pending consent also returns `consent_url`; visit it to authorize
+the grant. `--json` returns these fields with `saved: true`. Tokens, callback
+nonces and response extensions remain in the private session.
+
+The session records the validated incoming-payment intent, discovered wallets,
+signing identity, callback context and full SDK grant response. The CLI creates
+it exclusively with permissions `0600`, uses a sibling lock and saves updates
+atomically. Existing files and symlinks are rejected. Use the existing
+[`grant continue`](#grant-continuation-and-callbacks) command with the returned
+callback to finish authorization, or [`grant cancel`](#grant-cancellation) to
+cancel. Continuation preserves the payment intent. An approved grant alone does
+not create or send a payment.
+
+Argument/configuration errors return status 2; HTTP and session-file failures
+return status 1 with safe diagnostics. Discovery and known preflight failures
+remove the unused reservation. Before submitting authorization, the CLI saves
+an `in-flight` marker; an ambiguous response leaves the session `uncertain`.
+Interrupted attempts can also leave a lock. Reconcile these recorded attempts
+before removing a lock or starting again. There are no automatic retries.
 
 ## Grant continuation and callbacks
 

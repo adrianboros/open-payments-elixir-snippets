@@ -12,16 +12,48 @@ defmodule OpenPaymentsSnippets.GrantSession do
     do: {:error, {:argument, "Supply a private grant-session file."}}
 
   def transaction(path, action) do
+    with_lock(path, fn path ->
+      with {:ok, session} <- load(path), do: action.(path, session)
+    end)
+  end
+
+  @spec create(String.t(), function()) :: term()
+  def create(path, action) do
+    with_lock(path, fn path ->
+      case File.open(path, [:write, :binary, :exclusive]) do
+        {:ok, file} ->
+          result =
+            try do
+              protect(path)
+            after
+              File.close(file)
+            end
+
+          case result do
+            :ok ->
+              action.(path)
+
+            error ->
+              File.rm(path)
+              error
+          end
+
+        {:error, _reason} ->
+          {:error,
+           {:operation,
+            "Unable to create private session. Use a new writable path; existing files are never overwritten."}}
+      end
+    end)
+  end
+
+  defp with_lock(path, action) do
     path = Path.expand(path)
     lock_path = path <> ".lock"
 
     case File.open(lock_path, [:write, :binary, :exclusive]) do
       {:ok, lock} ->
         try do
-          with :ok <- protect(lock_path),
-               {:ok, session} <- load(path) do
-            action.(path, session)
-          end
+          with :ok <- protect(lock_path), do: action.(path)
         after
           File.close(lock)
           File.rm(lock_path)
