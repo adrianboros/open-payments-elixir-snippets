@@ -948,6 +948,22 @@ mix compile --warnings-as-errors
 ```
 
 After fetching dependencies, the test suite runs offline and uses a local HTTP
-server for wallet, incoming-payment, quote and grant integration tests. `OpenPaymentsSnippets.CLI.run/1` returns
-the exit status for callers and tests. The executable entry point `main/1`
-terminates the VM with that status.
+server for wallet, payment, quote, grant and token integration tests.
+`OpenPaymentsSnippets.CLI.run/1` returns the exit status for callers and tests.
+The executable entry point `main/1` terminates the VM with that status.
+
+The complete-flow tests exercise the existing commands through both quote-based
+and direct outgoing payments:
+
+```sh
+mix test test/open_payments_snippets/payment_flow_test.exs
+```
+
+Each scenario covers discovery, private grant sessions, incoming-payment creation
+and reads, callback verification, quote creation/read, token rotation, outgoing
+creation/read/list/spent amounts, incoming completion/list, revocation and grant
+cancellation. It verifies signatures from received HTTP bytes, rejects a wrong
+callback before continuation, checks token-role separation and redaction, and
+asserts the exact request count to catch unexpected retries or hidden requests.
+All services and payment progress are simulated locally using a public test key;
+no provider credentials or funded wallet are required.
