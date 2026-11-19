@@ -101,6 +101,8 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments payment prepare <session>` | Create one incoming payment with the saved receiver grant and retain its private result |
 | `open-payments payment authorize <session> <file\|->` | Request sender authorization with a debit limit bound to the saved incoming payment |
 | `open-payments payment quote <session>` | Create one fixed-receive quote using the saved sender grant and retain its private result |
+| `open-payments payment finish <session>` | Confirm and create one outgoing payment from the saved quote |
+| `open-payments payment finish <session> --yes --json` | Explicitly approve outgoing creation for automation and return its saved result |
 | `open-payments pointer resolve <pointer>` | Convert a quoted payment pointer to a URL offline |
 | `open-payments pointer resolve <pointer> --json` | Return the resolved URL in a JSON `url` field |
 
@@ -749,7 +751,8 @@ the server created a grant; review that outcome before submitting another reques
 receiver grant with incoming-payment `create` and `read` permissions. This
 command stops at receiver authorization. Use `payment prepare` next to create
 the incoming payment, then `payment authorize` for sender authorization and
-`payment quote` to obtain a quote. Sending through `payment finish` remains planned.
+`payment quote` to obtain a quote. Review it and use `payment finish` to create
+the outgoing payment.
 
 Save a payment request as JSON:
 
@@ -852,7 +855,7 @@ the incoming payment. There are no automatic retries. Argument/configuration
 failures return status 2; operation/file failures return status 1.
 
 This step creates the receiver's incoming resource. Continue with sender
-authorization below, then quote the payment. Outgoing creation remains a later step.
+authorization below, then quote and confirm the outgoing payment.
 
 ## Authorizing the sender
 
@@ -915,9 +918,8 @@ ambiguous response leaves the sender attempt `uncertain`, retaining the receiver
 record for reconciliation. Interruptions and save failures can leave an in-flight
 attempt. There are no automatic retries. Argument/configuration failures return
 status 2; HTTP, transport and file failures return status 1 with safe diagnostics.
-This command requests authorization. Continue with `payment quote` after approval;
-outgoing creation remains a later step, with explicit confirmation required before
-the complete flow sends funds.
+This command requests authorization. Continue with `payment quote` after approval,
+then explicitly confirm outgoing creation with `payment finish`.
 
 ## Quoting the saved payment
 
@@ -964,6 +966,68 @@ can leave an in-flight attempt. Reconcile these outcomes before continuing,
 because the server may already have created the quote. There are no automatic
 retries. Argument/configuration failures return status 2; operation/file failures
 return status 1 with safe diagnostics. This step creates a quote and sends no funds.
+
+## Finishing the payment
+
+Create an outgoing payment from a reviewed, saved quote:
+
+```sh
+./open-payments payment finish '/absolute/private/directory/payment-session.json'
+```
+
+Before any creation request, text mode shows the sender, incoming-payment and
+quote URLs, debit/receive amounts and returned quote expiry on stderr. Type `send`
+to confirm. Other input, a blank line or end of input declines; the command returns
+status 0 with `Payment not sent` and leaves the session unchanged. The session lock
+is held during confirmation so another command cannot change its saved state.
+
+For automation, `--yes` explicitly confirms creation from this saved quote:
+
+```sh
+./open-payments payment finish '/absolute/private/directory/payment-session.json' \
+  --yes --json
+```
+
+New creation with `--json` requires `--yes`, which skips the prompt. The flag is
+accepted only by `payment finish`. Review the saved quote before invoking this
+form: it authorizes submission of that outgoing payment. The server enforces quote
+validity, grant permissions and limits; the CLI preserves returned expiry data.
+
+The command requires stage `quote-ready` and an issued sender token. It checks that
+the saved quote's wallet and receiver match the recorded sender and incoming
+payment. The SDK validates a quote-based request containing `walletAddress` and
+`quoteId`, then sends one signed POST to the saved sender resource server using
+the latest sender token. There are no discovery, quote refresh, readback or polling
+requests. Signing identity defaults and overrides work as in the other flow steps;
+`ACCESS_TOKEN` is unused. Resource-token, output, callback and pagination flags are
+rejected. Local HTTP requires `--allow-http`.
+
+Before submitting, the CLI atomically saves an in-flight marker, the exact outgoing
+request, confirmation method and confirmation time. A valid creation response is
+stored in full at `payment.outgoing_payment` and the stage becomes `outgoing-created`.
+Both grants, the incoming payment, quote and rotated-token context remain private
+in the same `0600` file. Text output reports the outgoing URL, `failed` and the
+debit/receive/sent amounts. JSON returns `status: "created"`, `stage`, `saved`,
+`session`, `outgoing_payment_url`, `failed`, `debit_amount`, `receive_amount` and
+`sent_amount`. Amount summaries contain only `value`, `assetCode` and `assetScale`;
+metadata, grant spent amounts and extensions stay in the private file.
+
+Status 0 means a creation response was recorded, including a response with
+`failed: true`. It does not establish delivery or settlement. An omitted SDK
+`failed` field appears as JSON null in the summary. Use `outgoing get` separately
+for current payment details. Repeating finish returns the saved response with
+`saved: false`, without confirmation, HTTP or file updates, even after sender-token
+revocation. A failed or damaged saved result never triggers replacement creation.
+Earlier prepare, authorize and quote commands still return their saved results.
+Cancelling the active grant does not reverse an already created outgoing payment.
+
+Known preflight failures restore the ready quote and require confirmation on a
+later attempt. HTTP, transport or invalid-response failures leave the exact attempt
+`uncertain`; an interruption or post-response save failure can leave it in-flight.
+The outgoing payment may already have been created or started. Reconcile that
+outcome before any further action. The CLI makes no automatic retry, and the
+saved attempt or stale lock blocks concurrent and repeated submissions.
+Argument/configuration failures return status 2; operation/file failures return 1.
 
 ## Grant continuation and callbacks
 

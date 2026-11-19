@@ -9,7 +9,14 @@ defmodule OpenPaymentsSnippets.PaymentSession do
           {:ok, map(), struct(), WalletData.t(), WalletData.t()} | {:error, term()}
   def context(session) do
     with %{"version" => 1, "stage" => stage} = payment <- session["payment"],
-         true <- stage in ["receiver-grant", "incoming-ready", "sender-grant", "quote-ready"],
+         true <-
+           stage in [
+             "receiver-grant",
+             "incoming-ready",
+             "sender-grant",
+             "quote-ready",
+             "outgoing-created"
+           ],
          {:ok, sender} <- WalletData.from_map(payment["sender_wallet"]),
          {:ok, receiver} <- WalletData.from_map(payment["receiver_wallet"]),
          {:ok, request} <- CreateIncomingPayment.from_map(payment["incoming_request"]),
@@ -25,7 +32,7 @@ defmodule OpenPaymentsSnippets.PaymentSession do
   end
 
   defp active_grant(session, %{"stage" => stage} = payment, sender, receiver)
-       when stage in ["sender-grant", "quote-ready"] do
+       when stage in ["sender-grant", "quote-ready", "outgoing-created"] do
     with true <- session["grant_endpoint"] == sender.auth_server,
          %{} = archived <- payment["receiver_grant"],
          {:ok, _response, _received} <- GrantSession.validate(archived),

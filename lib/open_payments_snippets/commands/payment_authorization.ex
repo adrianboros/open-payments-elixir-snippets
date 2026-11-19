@@ -25,7 +25,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentAuthorization do
              {:ok, payment, _request, sender, _receiver} <- PaymentSession.context(session),
              {:ok, incoming} <- incoming(payment),
              {:ok, client, _key} <- GrantSession.client(session, options) do
-          if payment["stage"] in ["sender-grant", "quote-ready"] do
+          if payment["stage"] in ["sender-grant", "quote-ready", "outgoing-created"] do
             if payment["sender_authorization"] == intent,
               do: {:ok, summary(path, session, response, false)},
               else: invalid("Sender authorization is already recorded with different input.")
@@ -57,7 +57,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentAuthorization do
   defp intent(_data), do: {:error, "Sender authorization must be a JSON object."}
 
   defp incoming(%{"stage" => stage} = payment)
-       when stage in ["incoming-ready", "sender-grant", "quote-ready"] do
+       when stage in ["incoming-ready", "sender-grant", "quote-ready", "outgoing-created"] do
     case IncomingPaymentWithMethods.from_map(payment["incoming_payment"]) do
       {:ok, incoming} -> {:ok, incoming}
       _ -> invalid("Invalid saved incoming payment. Reconcile the session before continuing.")

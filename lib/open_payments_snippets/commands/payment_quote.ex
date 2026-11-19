@@ -13,7 +13,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentQuote do
            {:ok, payment, request, sender, _receiver} <- PaymentSession.context(session),
            :ok <- stage(payment),
            {:ok, client, _key} <- GrantSession.client(session, options) do
-        if payment["stage"] == "quote-ready" do
+        if payment["stage"] in ["quote-ready", "outgoing-created"] do
           cached(path, payment)
         else
           prepare(path, session, client, response.access_token, request, sender)
@@ -23,6 +23,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentQuote do
   end
 
   defp stage(%{"stage" => "quote-ready"}), do: :ok
+  defp stage(%{"stage" => "outgoing-created"}), do: :ok
 
   defp stage(%{"stage" => "sender-grant"} = payment) do
     if Map.has_key?(payment, "quote"),
