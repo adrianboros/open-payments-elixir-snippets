@@ -1,6 +1,8 @@
 defmodule OpenPaymentsSnippets.PaymentFlowTest do
   use ExUnit.Case, async: false
 
+  @moduletag :consumer_flow
+
   import ExUnit.CaptureIO
   import Bitwise
   alias OpenPaymentsSnippets.CLI
@@ -511,18 +513,31 @@ defmodule OpenPaymentsSnippets.PaymentFlowTest do
   defp invoke(args, payload, expected) do
     input = if payload, do: Jason.encode!(payload), else: ""
 
-    stderr =
-      capture_io(:stderr, fn ->
-        stdout =
-          capture_io([input: input], fn ->
-            send(self(), {:exit_status, CLI.run(args ++ ["--allow-http", "--json"])})
-          end)
+    {stdout, stderr, status} =
+      case System.get_env("OPEN_PAYMENTS_TEST_EXECUTABLE") do
+        nil ->
+          stderr =
+            capture_io(:stderr, fn ->
+              stdout =
+                capture_io([input: input], fn ->
+                  send(self(), {:exit_status, CLI.run(args ++ ["--allow-http", "--json"])})
+                end)
 
-        send(self(), {:stdout, stdout})
-      end)
+              send(self(), {:stdout, stdout})
+            end)
 
-    assert_received {:stdout, stdout}
-    assert_received {:exit_status, status}
+          assert_received {:stdout, stdout}
+          assert_received {:exit_status, status}
+          {stdout, stderr, status}
+
+        executable ->
+          OpenPaymentsSnippets.Test.Executable.run(
+            executable,
+            args ++ ["--allow-http", "--json"],
+            input
+          )
+      end
+
     assert status == expected, "Command #{inspect(args)} returned #{status}: #{stderr}"
 
     for secret <- [

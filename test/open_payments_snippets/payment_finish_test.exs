@@ -168,6 +168,7 @@ defmodule OpenPaymentsSnippets.PaymentFinishTest do
     refute_receive {:http_request, _}, 20
   end
 
+  @tag :consumer_flow
   test "the complete flow creates one outgoing payment then allows cached results, revocation and cancellation",
        c do
     base =
@@ -862,14 +863,24 @@ defmodule OpenPaymentsSnippets.PaymentFinishTest do
   end
 
   defp invoke(argv, input \\ "") do
-    stderr =
-      capture_io(:stderr, fn ->
-        stdout = capture_io([input: input], fn -> send(self(), {:status, CLI.run(argv)}) end)
-        send(self(), {:stdout, stdout})
-      end)
+    {stdout, stderr, status} =
+      case System.get_env("OPEN_PAYMENTS_TEST_EXECUTABLE") do
+        nil ->
+          stderr =
+            capture_io(:stderr, fn ->
+              stdout =
+                capture_io([input: input], fn -> send(self(), {:status, CLI.run(argv)}) end)
 
-    assert_received {:stdout, stdout}
-    assert_received {:status, status}
+              send(self(), {:stdout, stdout})
+            end)
+
+          assert_received {:stdout, stdout}
+          assert_received {:status, status}
+          {stdout, stderr, status}
+
+        executable ->
+          OpenPaymentsSnippets.Test.Executable.run(executable, argv, input)
+      end
 
     for secret <- [
           "test-continuation-secret",

@@ -13,8 +13,9 @@ interledger/
 └── open-payments-elixir-snippets/
 ```
 
-The project declares Elixir 1.17+ to match the SDK. Local verification currently
-uses Elixir 1.20.4 / OTP 29. Minimum-runtime execution remains pending.
+The project declares Elixir 1.17+ to match the SDK. Isolated consumer verification
+covers Linux Elixir/OTP pairs 1.17/26, 1.19/28 and 1.20/29. The macOS development
+runtime is Elixir 1.20.4 / OTP 29. See the verification details below.
 
 ```sh
 mix deps.get
@@ -1257,3 +1258,57 @@ callback before continuation, checks token-role separation and redaction, and
 asserts the exact request count to catch unexpected retries or hidden requests.
 All services and payment progress are simulated locally using a public test key;
 no provider credentials or funded wallet are required.
+
+## Isolated consumer check
+
+Build a production executable and run the CLI against a clean, committed SDK
+snapshot in a temporary workspace:
+
+```sh
+elixir scripts/check_consumer.exs
+# Use cached Hex dependencies without registry/network access:
+elixir scripts/check_consumer.exs --offline
+```
+
+The default exports the sibling SDK's committed `HEAD` and prints its full commit
+ID. Select another local checkout or an available commit explicitly with
+`--sdk-path <directory>` and `--sdk-ref <revision>`. The check copies CLI source,
+tests and the lockfile, builds dependencies from scratch, compiles a production
+escript, runs `mix check`, then performs seven executable smoke tests and three
+complete executable flows. Each subprocess runs outside the checkout with real
+stdin and separate stdout/stderr capture. Environment wallet credentials are
+cleared before testing; flow tests supply public keys and local simulated servers.
+The temporary SDK, CLI copy and build output are removed afterward.
+
+The smoke tests cover help/version, payment pointers, key loading/export, UTF-8
+stdin, error exits and production archive contents. The executable flows cover
+both low-level payment variants and the staged flow through confirmed outgoing
+creation, token rotation/revocation and grant cancellation. Normal `mix test`
+continues to run those scenarios through the testable CLI runner.
+
+For an environment without Git, provide a source archive exported beforehand:
+
+```sh
+git -C ../open-payments-elixir archive --format=tar \
+  --output=/tmp/open-payments-sdk.tar HEAD -- \
+  mix.exs mix.lock README.md LICENSE CHANGELOG.md lib priv
+elixir scripts/check_consumer.exs --sdk-archive /tmp/open-payments-sdk.tar --offline
+```
+
+Archive mode prints the archive's SHA256. Use a known committed revision when
+exporting it to reproduce a particular SDK snapshot. Offline mode requires the
+locked dependencies and Hex tooling to be cached already.
+
+Verified with SDK commit `e63ebe161d10a24a49b97aaed6871bf8e818b5c2`:
+
+| Runtime | Isolated result |
+| --- | --- |
+| Linux Elixir 1.17.3 / OTP 26 | 334 runner tests, 7 executable smoke tests and 3 executable flows |
+| Linux Elixir 1.19.7 / OTP 28 | Same checks pass |
+| Linux Elixir 1.20.5 / OTP 29 | Same checks pass |
+| macOS Elixir 1.20.4 / OTP 29 | Same checks pass using the default Git export |
+
+The Linux checks used cached images with networking disabled and source mounts
+read-only. Fresh Elixir 1.20 builds emit two existing `message_signatures`
+dependency deprecation warnings; CLI compilation and checks pass. Hosted CI and
+live authenticated-provider verification remain pending.
