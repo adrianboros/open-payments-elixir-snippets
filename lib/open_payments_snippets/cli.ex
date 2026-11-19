@@ -28,6 +28,7 @@ defmodule OpenPaymentsSnippets.CLI do
     Grants,
     IncomingPayments,
     OutgoingPayments,
+    PaymentAuthorization,
     PaymentPreparation,
     PaymentStart,
     Keys,
@@ -57,6 +58,7 @@ defmodule OpenPaymentsSnippets.CLI do
     outgoing grant-spent-amounts [address] Read the resource token's current grant spent amounts
     payment start <file|-> Discover wallets and save initial receiver authorization
     payment prepare <session> Create and save an incoming payment using receiver authorization
+    payment authorize <session> <file|-> Request bounded sender authorization for the saved payment
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
@@ -230,6 +232,12 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["payment", "start", source]), do: {:ok, {:payment, :start, source}}
   defp command(["payment", "prepare"]), do: {:ok, {:payment, :prepare, nil}}
   defp command(["payment", "prepare", session]), do: {:ok, {:payment, :prepare, session}}
+  defp command(["payment", "authorize"]), do: {:ok, {:payment, :authorize, nil, nil}}
+  defp command(["payment", "authorize", session]), do: {:ok, {:payment, :authorize, session, nil}}
+
+  defp command(["payment", "authorize", session, source]),
+    do: {:ok, {:payment, :authorize, session, source}}
+
   defp command(["pointer", "resolve"]), do: {:ok, {:pointer, :resolve, nil}}
   defp command(["pointer", "resolve", pointer]), do: {:ok, {:pointer, :resolve, pointer}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
@@ -243,6 +251,7 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp resource_command?({:token, operation, _}) when operation in [:rotate, :revoke], do: true
   defp resource_command?({:payment, operation, _}) when operation in [:start, :prepare], do: true
+  defp resource_command?({:payment, :authorize, _, _}), do: true
   defp resource_command?(_command), do: false
 
   defp signing_command?({:keys, _}), do: true
@@ -257,6 +266,8 @@ defmodule OpenPaymentsSnippets.CLI do
 
   defp authenticated_command?({:payment, operation, _}) when operation in [:start, :prepare],
     do: true
+
+  defp authenticated_command?({:payment, :authorize, _, _}), do: true
 
   defp authenticated_command?(command), do: resource_token_command?(command)
 
@@ -404,6 +415,10 @@ defmodule OpenPaymentsSnippets.CLI do
     print_payment_result(PaymentPreparation.run(session, options), options)
   end
 
+  defp execute({:payment, :authorize, session, source}, options) do
+    print_payment_result(PaymentAuthorization.run(session, source, options), options)
+  end
+
   defp execute({:pointer, :resolve, pointer}, _options) when pointer in [nil, ""] do
     argument_error("Supply a payment pointer, quoted with single quotes.")
   end
@@ -428,7 +443,7 @@ defmodule OpenPaymentsSnippets.CLI do
             Jason.encode!(result)
           else
             lines = [
-              if(result.stage == "receiver-grant",
+              if(result.stage in ["receiver-grant", "sender-grant"],
                 do: "Payment authorization #{result.status}",
                 else: "Incoming payment ready"
               ),

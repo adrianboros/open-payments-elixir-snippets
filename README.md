@@ -99,6 +99,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments token revoke <session>` | Revoke the issued access token and remove it from the private grant session |
 | `open-payments payment start <file\|-> --output <path>` | Discover sender and receiver wallets and save initial receiver authorization |
 | `open-payments payment prepare <session>` | Create one incoming payment with the saved receiver grant and retain its private result |
+| `open-payments payment authorize <session> <file\|->` | Request sender authorization with a debit limit bound to the saved incoming payment |
 | `open-payments pointer resolve <pointer>` | Convert a quoted payment pointer to a URL offline |
 | `open-payments pointer resolve <pointer> --json` | Return the resolved URL in a JSON `url` field |
 
@@ -746,8 +747,8 @@ the server created a grant; review that outcome before submitting another reques
 `payment start` begins a payment by discovering both wallets and requesting a
 receiver grant with incoming-payment `create` and `read` permissions. This
 command stops at receiver authorization. Use `payment prepare` next to create
-the incoming payment. Sender authorization, quoting and sending through
-`payment finish` remain planned.
+the incoming payment, then `payment authorize` for sender authorization. Quoting
+and sending through `payment finish` remain planned.
 
 Save a payment request as JSON:
 
@@ -849,8 +850,72 @@ these outcomes before any further operation: the server may already have created
 the incoming payment. There are no automatic retries. Argument/configuration
 failures return status 2; operation/file failures return status 1.
 
-This step creates the receiver's incoming resource. Sender authorization, quotes
-and outgoing payments remain later steps in the complete-flow implementation.
+This step creates the receiver's incoming resource. Continue with sender
+authorization below; quotes and outgoing payments remain later flow steps.
+
+## Authorizing the sender
+
+After preparation, supply the sender's debit limit and a callback URI in JSON:
+
+```json
+{
+  "debitAmount": {"value": "200", "assetCode": "USD", "assetScale": 2},
+  "finishUri": "https://client.example/sender-return?state=your-sender-state"
+}
+```
+
+Both fields are required; other fields are rejected. `debitAmount` is the outgoing
+grant's debit limit in the sender asset's smallest units. The example requests a
+USD 2.00 limit, independently of the receiver's EUR amount. The SDK validates its
+amount schema, and the authorization server enforces the granted limit. Supply a
+callback URI you control with state for this sender interaction. Each new sender
+grant gets a fresh 32-byte nonce.
+
+```sh
+./open-payments payment authorize '/absolute/private/directory/payment-session.json' \
+  '/absolute/path/to/sender-authorization.json'
+cat '/absolute/path/to/sender-authorization.json' | ./open-payments payment authorize \
+  '/absolute/private/directory/payment-session.json' - --json
+```
+
+The command uses the recorded signing identity and sender authorization server,
+with the same key configuration and identity override checks as `payment prepare`.
+It makes one signed SDK grant request, without discovery. The requested access is
+quote `create`/`read` and outgoing-payment `create`/`read`, with the canonical sender
+wallet identifier and limits containing both the explicit debit amount and the
+saved incoming-payment URL. `ACCESS_TOKEN` is unused; resource-token, output,
+callback and pagination flags are rejected. Local HTTP requires `--allow-http`.
+
+The same private session advances to `sender-grant`. The complete receiver grant
+context is retained separately at `payment.receiver_grant`, alongside the incoming
+payment and sender authorization input. The active grant fields now hold the
+sender endpoint, fresh callback context and sender response. Receiver tokens and
+callback verification are retained in the receiver record; they are not used as
+sender credentials. The existing `grant continue`, `token rotate`, `token revoke`
+and `grant cancel` commands operate on the active sender grant after this step.
+
+Success returns status 0 and reports `pending` or `approved`, stage `sender-grant`,
+the session path, and a consent URL when returned. `--json` returns those fields
+with `saved: true`. Visit the consent URL for a pending grant, then pass its
+returned callback to `grant continue` using the same session. The CLI verifies
+that callback against the sender's saved context and honors continuation waits.
+Tokens, nonces and full responses remain private.
+
+Repeating `payment authorize` with the same JSON returns the active sender status
+with `saved: false` and makes no request or file update. A changed amount or callback
+is rejected. After token revocation it reports `revoked` without starting again.
+Repeating `payment prepare` still returns its saved incoming-payment result and
+preserves the sender stage. Cancelling the active grant replaces the session with
+the usual minimal cancellation record, discarding its private flow context.
+
+The shared lock and durable in-flight marker prevent overlapping or replayed
+requests. Known preflight failures restore the prepared receiver session. An
+ambiguous response leaves the sender attempt `uncertain`, retaining the receiver
+record for reconciliation. Interruptions and save failures can leave an in-flight
+attempt. There are no automatic retries. Argument/configuration failures return
+status 2; HTTP, transport and file failures return status 1 with safe diagnostics.
+This command requests authorization; quote and outgoing creation remain later
+steps, with explicit confirmation required before the complete flow sends funds.
 
 ## Grant continuation and callbacks
 

@@ -2,38 +2,21 @@ defmodule OpenPaymentsSnippets.Commands.PaymentPreparation do
   @moduledoc false
 
   alias OpenPayments.{Error, IncomingPayment}
-  alias OpenPayments.Types.{AccessToken, CreateIncomingPayment, IncomingPaymentWithMethods}
-  alias OpenPayments.Types.WalletAddress, as: WalletData
-  alias OpenPaymentsSnippets.GrantSession
+  alias OpenPayments.Types.{AccessToken, IncomingPaymentWithMethods}
+  alias OpenPaymentsSnippets.{GrantSession, PaymentSession}
 
   @spec run(String.t() | nil, keyword()) :: {:ok, map()} | {:error, term()}
   def run(path, options) do
     GrantSession.transaction(path, fn path, session ->
       with {:ok, response, _received} <- GrantSession.validate(session),
-           {:ok, payment, request, receiver} <- payment(session),
+           {:ok, payment, request, _sender, receiver} <- PaymentSession.context(session),
            {:ok, client, _key} <- GrantSession.client(session, options) do
         case payment["stage"] do
-          "incoming-ready" -> cached(path, payment)
           "receiver-grant" -> prepare(path, session, client, response, request, receiver)
+          _ -> cached(path, payment)
         end
       end
     end)
-  end
-
-  defp payment(session) do
-    with %{"version" => 1, "stage" => stage} = payment <- session["payment"],
-         true <- stage in ["receiver-grant", "incoming-ready"],
-         {:ok, _sender} <- WalletData.from_map(payment["sender_wallet"]),
-         {:ok, receiver} <- WalletData.from_map(payment["receiver_wallet"]),
-         {:ok, request} <- CreateIncomingPayment.from_map(payment["incoming_request"]),
-         true <- not is_nil(request.incoming_amount),
-         true <- request.wallet_address == receiver.id,
-         true <- session["grant_endpoint"] == receiver.auth_server,
-         true <- stage != "receiver-grant" or not Map.has_key?(payment, "incoming_payment") do
-      {:ok, payment, request, receiver}
-    else
-      _ -> invalid("Invalid payment context. Use a session created by payment start.")
-    end
   end
 
   defp cached(path, payment) do
