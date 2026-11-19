@@ -17,7 +17,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentStart do
   @spec run(String.t() | nil, keyword()) :: {:ok, map()} | {:error, term()}
   def run(source, options) do
     with {:ok, _output} <- output(options[:output]),
-         {:ok, data} <- Input.json(source, "payment request") do
+         {:ok, data} <- Input.json(source, "payment request", options) do
       from_map(data, options)
     else
       {:error, message} -> invalid(message)
@@ -27,10 +27,10 @@ defmodule OpenPaymentsSnippets.Commands.PaymentStart do
   @spec from_map(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def from_map(data, options) do
     with {:ok, output} <- output(options[:output]),
-         {:ok, incoming, finish} <- intent(data),
+         {:ok, incoming, finish, sender_address} <- intent(data),
          {:ok, client, key} <- Config.authenticated_client(options) do
       GrantSession.create(output, fn path ->
-        discover(path, client, key, incoming, finish, options[:scenario])
+        discover(path, client, key, incoming, finish, sender_address, options[:scenario])
       end)
     else
       {:error, message} -> invalid(message)
@@ -41,7 +41,9 @@ defmodule OpenPaymentsSnippets.Commands.PaymentStart do
   defp output(_path), do: {:error, "Supply --output with a new private payment-session path."}
 
   defp intent(data) when is_map(data) do
-    with true <- map_size(Map.drop(data, ~w(receiver receiveAmount finishUri metadata))) == 0,
+    with true <-
+           map_size(Map.drop(data, ~w(sender receiver receiveAmount finishUri metadata))) == 0,
+         {:ok, sender} <- sender_address(data),
          receiver when is_binary(receiver) and receiver != "" <- data["receiver"],
          {:ok, receiver} <- receiver_url(receiver),
          true <- Map.has_key?(data, "receiveAmount"),
@@ -52,7 +54,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentStart do
              "uri" => data["finishUri"],
              "nonce" => Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
            }) do
-      {:ok, incoming, finish}
+      {:ok, incoming, finish, sender}
     else
       _ ->
         {:error,
@@ -64,6 +66,14 @@ defmodule OpenPaymentsSnippets.Commands.PaymentStart do
   defp receiver_url("$" <> _ = pointer), do: PaymentPointer.to_url(pointer)
   defp receiver_url(url), do: {:ok, url}
 
+  defp sender_address(data) do
+    case Map.fetch(data, "sender") do
+      :error -> {:ok, nil}
+      {:ok, address} when is_binary(address) and address != "" -> receiver_url(address)
+      _ -> {:error, :sender}
+    end
+  end
+
   defp incoming_map(data, receiver) do
     request = %{"walletAddress" => receiver, "incomingAmount" => data["receiveAmount"]}
 
@@ -72,8 +82,9 @@ defmodule OpenPaymentsSnippets.Commands.PaymentStart do
       else: request
   end
 
-  defp discover(path, client, key, incoming, finish, scenario) do
-    with {:ok, sender} <- WalletAddress.get(client, Client.wallet_address(client)),
+  defp discover(path, client, key, incoming, finish, sender_address, scenario) do
+    with {:ok, sender} <-
+           WalletAddress.get(client, sender_address || Client.wallet_address(client)),
          {:ok, receiver} <- WalletAddress.get(client, incoming.wallet_address),
          {:ok, request} <-
            GrantRequest.from_map(%{

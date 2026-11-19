@@ -125,7 +125,7 @@ defmodule OpenPaymentsSnippets.PaymentFlowTest do
       assert {"", stderr} =
                invoke(["grant", "continue", sender_session, "--callback-file", callback], nil, 2)
 
-      assert stderr =~ "Invalid interaction callback"
+      assert stderr =~ "Callback query parameters do not match this session"
       assert File.read!(sender_session) == original
       assert drain() == []
       File.write!(callback, returned <> "\n")

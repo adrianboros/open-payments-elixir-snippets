@@ -1,0 +1,21 @@
+{
+  "client": {
+    "$var": "CLIENT_WALLET_URL"
+  },
+  "access_token": {
+    "access": [
+      {
+        "type": "incoming-payment",
+        "actions": [
+          "create",
+          "read"
+        ]
+      }
+    ]
+  },
+  "interact": {
+    "start": [
+      "redirect"
+    ]
+  }
+}

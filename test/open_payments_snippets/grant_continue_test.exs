@@ -124,6 +124,104 @@ defmodule OpenPaymentsSnippets.GrantContinueTest do
     assert_received {:http_request, %{method: :POST}}
   end
 
+  test "offline callback verification needs no signing key, HTTP or session update", c do
+    base = server(approved())
+    write(c.path, initial(base))
+    before = File.read!(c.path)
+    cb = callback(c.dir)
+    contents = File.read!(cb)
+    System.delete_env("PRIVATE_KEY_FILE")
+
+    assert {"{\"valid\":true}\n", "", 0} =
+             invoke(["grant", "verify-callback", c.path, "--callback-file", cb, "--json"])
+
+    assert {"Valid interaction callback\n", "", 0} =
+             invoke(["grant", "verify-callback", c.path, "--callback-file", "-"], callback_url())
+
+    assert File.read!(c.path) == before
+    assert File.read!(cb) == contents
+    refute File.exists?(c.path <> ".lock")
+    refute_received {:http_request, _}
+  end
+
+  test "manual callback files tolerate surrounding whitespace and blank lines while retaining strict verification",
+       c do
+    base = server(approved())
+
+    for text <- [
+          callback_url(),
+          "\n\n" <> callback_url() <> "\n\n",
+          " \t" <> callback_url() <> "\r\n  "
+        ] do
+      write(c.path, initial(base))
+      cb = callback(c.dir, text)
+      contents = File.read!(cb)
+      before = File.read!(c.path)
+      assert {_, "", 0} = invoke(["grant", "verify-callback", c.path, "--callback-file", cb])
+      assert File.read!(c.path) == before
+      assert {_, "", 0} = invoke(args(c.path) ++ ["--callback-file", cb])
+      assert load(c.path)["callback_verified"]
+      assert File.read!(cb) == contents
+      assert_received {:http_request, %{method: :POST}}
+    end
+
+    refute_received {:http_request, _}
+  end
+
+  test "callback diagnostics distinguish broken text, wrong destinations, session query mismatch and missing parameters",
+       c do
+    base = server(approved())
+    write(c.path, initial(base))
+    before = File.read!(c.path)
+    valid = callback_url()
+
+    for {url, message} <- [
+          {String.replace(valid, "&", "&\n", global: false), "unbroken URL"},
+          {"\"" <> valid <> "\"", "unbroken URL"},
+          {"[return](" <> valid <> ")", "unbroken URL"},
+          {"", "unbroken URL"},
+          {<<255>>, "UTF-8 URL"},
+          {String.replace(valid, "/return?", "/other?"), "destination"},
+          {String.replace(valid, "local-state", "other-state"),
+           "payment direction and consent stage"},
+          {valid <> "&hash=duplicate", "exactly one"},
+          {"https://client.example/return?state=local-state", "exactly one"},
+          {valid <> "&error=denied", "reports an error"},
+          {valid <> "&bad=%GG", "invalid percent encoding"}
+        ] do
+      cb = callback(c.dir, url)
+      assert {"", stderr, 2} = invoke(["grant", "verify-callback", c.path, "--callback-file", cb])
+      assert stderr =~ message
+      assert File.read!(c.path) == before
+    end
+
+    refute_received {:http_request, _}
+  end
+
+  test "offline callback checking requires a pending session and private file and rejects unrelated flags",
+       c do
+    base = server(approved())
+    write(c.path, initial(base))
+    cb = callback(c.dir)
+
+    for flags <- [
+          [],
+          ["--callback-file", cb, "--yes"],
+          ["--callback-file", cb, "--key-file", c.key],
+          ["--callback-file", cb, "--allow-http"]
+        ] do
+      assert {"", _, 2} = invoke(["grant", "verify-callback", c.path] ++ flags)
+    end
+
+    File.chmod!(c.path, 0o644)
+    assert {"", _, 2} = invoke(["grant", "verify-callback", c.path, "--callback-file", cb])
+    File.chmod!(c.path, 0o600)
+    write(c.path, Map.put(initial(base), "callback_verified", true))
+    assert {"", stderr, 2} = invoke(["grant", "verify-callback", c.path, "--callback-file", cb])
+    assert stderr =~ "already been consumed"
+    refute_received {:http_request, _}
+  end
+
   test "rejects wrong callback destinations, errors, duplicates and double decoding before writing",
        c do
     base = server(approved())

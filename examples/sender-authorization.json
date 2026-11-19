@@ -1,0 +1,17 @@
+{
+  "debitAmount": {
+    "value": {
+      "$var": "MAX_DEBIT_VALUE"
+    },
+    "assetCode": {
+      "$var": "SENDER_ASSET_CODE"
+    },
+    "assetScale": {
+      "$var": "SENDER_ASSET_SCALE",
+      "type": "integer"
+    }
+  },
+  "finishUri": {
+    "$var": "SENDER_FINISH_URI"
+  }
+}

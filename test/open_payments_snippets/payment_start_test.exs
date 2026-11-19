@@ -139,6 +139,22 @@ defmodule OpenPaymentsSnippets.PaymentStartTest do
     assert length(Enum.uniq(nonces)) == 2
   end
 
+  test "an explicit sender selects the payer without changing the signing client", c do
+    base = server(:pending)
+    output = Path.join(c.directory, "separate-sender.json")
+    data = Map.put(intent(base), "sender", base <> "/receiver")
+    assert {_, "", 0} = invoke(args("-", output), Jason.encode!(data))
+    saved = load(output)
+    assert saved["wallet_address"] == base <> "/sender"
+    assert saved["payment"]["sender_wallet"]["id"] == base <> "/receiver-canonical"
+    assert_received {:http_request, %{method: :GET, target: "/receiver"}}
+    assert_received {:http_request, %{method: :GET, target: "/receiver"}}
+    assert_received {:http_request, %{method: :POST, body: body} = wire}
+    assert Jason.decode!(body)["client"] == base <> "/sender"
+    assert valid_signature?(wire)
+    refute_received {:http_request, _}
+  end
+
   test "saved payment context survives verified grant continuation and supports grant cancellation",
        c do
     base =

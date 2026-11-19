@@ -55,7 +55,7 @@ defmodule OpenPaymentsSnippets.Commands.IncomingPayments do
   @spec create(String.t() | nil, keyword()) ::
           {:ok, IncomingPaymentWithMethods.t()} | {:error, Error.t() | String.t()}
   def create(source, options) do
-    with {:ok, data} <- Input.json(source, "incoming-payment request"),
+    with {:ok, data} <- Input.json(source, "incoming-payment request", options),
          {:ok, request} <- CreateIncomingPayment.from_map(data),
          {:ok, token} <- Config.access_token(options),
          {:ok, client, _key} <- Config.authenticated_client(options),

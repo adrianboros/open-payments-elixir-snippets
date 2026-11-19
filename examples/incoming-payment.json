@@ -1,0 +1,20 @@
+{
+  "walletAddress": {
+    "$var": "RECEIVER_WALLET_URL"
+  },
+  "incomingAmount": {
+    "value": {
+      "$var": "RECEIVE_VALUE"
+    },
+    "assetCode": {
+      "$var": "RECEIVER_ASSET_CODE"
+    },
+    "assetScale": {
+      "$var": "RECEIVER_ASSET_SCALE",
+      "type": "integer"
+    }
+  },
+  "metadata": {
+    "description": "Open Payments via Elixir SDK - incoming payment"
+  }
+}

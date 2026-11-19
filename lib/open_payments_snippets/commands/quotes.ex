@@ -18,7 +18,7 @@ defmodule OpenPaymentsSnippets.Commands.Quotes do
   @spec create(String.t() | nil, keyword()) ::
           {:ok, QuoteData.t()} | {:error, Error.t() | String.t()}
   def create(source, options) do
-    with {:ok, data} <- Input.json(source, "quote request"),
+    with {:ok, data} <- Input.json(source, "quote request", options),
          {:ok, request} <- CreateQuote.from_map(data),
          {:ok, token} <- Config.access_token(options),
          {:ok, client, _key} <- Config.authenticated_client(options),

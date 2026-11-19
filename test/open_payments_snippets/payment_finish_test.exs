@@ -150,6 +150,118 @@ defmodule OpenPaymentsSnippets.PaymentFinishTest do
     refute_receive {:http_request, _}, 20
   end
 
+  test "a quote above the requested maximum is rejected before confirmation or HTTP for finish and finalize",
+       c do
+    base = HTTPServer.start({500, [], "private-server-body"})
+
+    session =
+      quoted(base)
+      |> put_in(["payment", "quote", "debitAmount", "value"], "249")
+      |> put_in(["payment", "sender_authorization", "debitAmount", "value"], "137")
+      |> put_in(
+        ["response", "access_token", "access", Access.at(1), "limits", "debitAmount", "value"],
+        "137"
+      )
+
+    session =
+      put_in(session, ["payment", "scenario"], %{
+        "version" => 1,
+        "name" => "quote-payment",
+        "sender_authorization" => session["payment"]["sender_authorization"]
+      })
+
+    write(c.path, session)
+    before = File.read!(c.path)
+
+    for command <- ["finish", "finalize"] do
+      assert {"", stderr, 2} = invoke(["payment", command, c.path, "--allow-http"], "send\n")
+      assert stderr =~ "249" and stderr =~ "137" and stderr =~ "No outgoing request was sent"
+      refute stderr =~ "Type send"
+      refute stderr =~ "test-quote-secret"
+      assert File.read!(c.path) == before
+      refute File.exists?(c.path <> ".lock")
+    end
+
+    refute_received {:http_request, _}
+  end
+
+  test "issued grant limits and permissions are checked even when the requested cap is sufficient",
+       c do
+    base = HTTPServer.start({500, [], "private-server-body"})
+    original = quoted(base)
+    access_path = ["response", "access_token", "access", Access.at(1)]
+
+    for change <- [
+          fn s -> put_in(s, access_path ++ ["limits", "debitAmount", "value"], "149") end,
+          fn s -> put_in(s, access_path ++ ["limits", "debitAmount", "assetCode"], "GBP") end,
+          fn s -> put_in(s, access_path ++ ["limits", "debitAmount", "assetScale"], 3) end,
+          fn s ->
+            put_in(s, access_path ++ ["limits", "receiver"], base <> "/incoming-payments/other")
+          end,
+          fn s -> put_in(s, access_path ++ ["identifier"], base <> "/other-wallet") end,
+          fn s -> put_in(s, access_path ++ ["actions"], ["read"]) end,
+          fn s -> put_in(s, ["response", "access_token", "access"], []) end,
+          fn s ->
+            put_in(s, access_path ++ ["limits"], %{
+              "receiveAmount" => %{amount() | "value" => "99"}
+            })
+          end
+        ] do
+      write(c.path, change.(original))
+      before = File.read!(c.path)
+      assert {"", stderr, 2} = invoke(args(c.path) ++ ["--yes"])
+      assert stderr =~ "issued token"
+      refute stderr =~ "Type send"
+      assert File.read!(c.path) == before
+    end
+
+    refute_received {:http_request, _}
+  end
+
+  test "debit comparisons preserve integer precision above floating point range", c do
+    base = HTTPServer.start({500, [], "private-server-body"})
+
+    for {cap, debit} <- [
+          {"9007199254740992", "9007199254740993"},
+          {"18446744073709551614", "18446744073709551615"}
+        ] do
+      session =
+        quoted(base)
+        |> put_in(["payment", "sender_authorization", "debitAmount", "value"], cap)
+        |> put_in(["payment", "quote", "debitAmount", "value"], debit)
+
+      write(c.path, session)
+      assert {"", stderr, 2} = invoke(args(c.path) ++ ["--yes"])
+      assert stderr =~ "requested maximum"
+    end
+
+    refute_received {:http_request, _}
+  end
+
+  test "an exact limit with leading zeros permits the quote and checks all matching issued entries",
+       c do
+    base = HTTPServer.start(fn wire -> json(201, outgoing(origin(wire))) end)
+
+    session =
+      quoted(base)
+      |> put_in(["payment", "sender_authorization", "debitAmount", "value"], "00000150")
+      |> put_in(
+        ["response", "access_token", "access", Access.at(1), "limits", "debitAmount", "value"],
+        "00000150"
+      )
+
+    narrow =
+      List.last(session["response"]["access_token"]["access"])
+      |> put_in(["limits", "debitAmount", "value"], "149")
+
+    session = update_in(session, ["response", "access_token", "access"], &[narrow | &1])
+    write(c.path, session)
+    assert {_, "", 0} = invoke(args(c.path) ++ ["--yes", "--json"])
+    assert load(c.path)["payment"]["stage"] == "outgoing-created"
+    assert_received {:http_request, %{method: :POST}}
+    refute_received {:http_request, _}
+  end
+
   test "JSON creation requires explicit yes and false does not bypass confirmation", c do
     base = HTTPServer.start({500, [], "private-server-body"})
     write(c.path, quoted(base))

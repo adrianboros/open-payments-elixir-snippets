@@ -5,9 +5,9 @@ defmodule OpenPaymentsSnippets.Commands.Grants do
   alias OpenPayments.Types.{GrantRequest, GrantResponse}
   alias OpenPaymentsSnippets.{Config, Input}
 
-  @spec validate(String.t() | nil) :: {:ok, %{valid: true}} | {:error, String.t()}
-  def validate(source) do
-    with {:ok, _request} <- read_request(source) do
+  @spec validate(String.t() | nil, keyword()) :: {:ok, %{valid: true}} | {:error, String.t()}
+  def validate(source, options \\ []) do
+    with {:ok, _request} <- read_request(source, options) do
       {:ok, %{valid: true}}
     end
   end
@@ -16,7 +16,7 @@ defmodule OpenPaymentsSnippets.Commands.Grants do
           {:ok, map()} | {:error, {:argument | :operation, String.t()}}
   def request(source, options) do
     with {:ok, output} <- output_path(options),
-         {:ok, request} <- read_request(source),
+         {:ok, request} <- read_request(source, options),
          {:ok, client, key} <- Config.authenticated_client(options) do
       save_request(output, client, key, request)
     else
@@ -130,8 +130,8 @@ defmodule OpenPaymentsSnippets.Commands.Grants do
   defp sdk_error(%Error{}),
     do: {:error, {:operation, "Grant request failed while signing the request."}}
 
-  defp read_request(source) do
-    with {:ok, data} <- Input.json(source, "grant request"),
+  defp read_request(source, options) do
+    with {:ok, data} <- Input.json(source, "grant request", options),
          {:ok, request} <- GrantRequest.from_map(data) do
       {:ok, request}
     else

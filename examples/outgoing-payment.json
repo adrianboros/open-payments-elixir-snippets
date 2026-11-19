@@ -1,0 +1,11 @@
+{
+  "walletAddress": {
+    "$var": "SENDER_WALLET_URL"
+  },
+  "quoteId": {
+    "$var": "QUOTE_URL"
+  },
+  "metadata": {
+    "description": "Open Payments via Elixir SDK - outgoing payment"
+  }
+}

@@ -45,6 +45,7 @@ defmodule ExecutableConsumerTest do
         do: assert(stdout =~ "payment #{command}")
 
     assert stdout =~ "--yes"
+    assert stdout =~ "grant verify-callback"
   end
 
   test "version metadata matches the isolated SDK consumer" do
@@ -75,18 +76,105 @@ defmodule ExecutableConsumerTest do
     refute stdout =~ "PRIVATE KEY"
   end
 
-  test "actual UTF-8 stdin and malformed input have correct exits" do
+  test "environment-file templates, UTF-8 stdin and malformed input have correct exits", c do
+    env_file = Path.join(Path.dirname(c.key), "example.env")
+    settings = "WALLET_ADDRESS='https://client.example/wallet'\nLABEL='from-file'\n"
+    File.write!(env_file, settings)
+
     payload = %{
-      "client" => "https://client.example/wallet",
+      "client" => %{"$var" => "WALLET_ADDRESS"},
       "access_token" => %{"access" => [%{"type" => "quote", "actions" => ["create"]}]},
       "interact" => %{"start" => ["redirect"]}
     }
 
-    input = Jason.encode!(Map.put(payload, "label", "Café 🌍"))
+    template = Jason.encode!(Map.put(payload, "label", %{"$var" => "LABEL"}))
+
+    assert {input, "", 0} =
+             run(
+               [
+                 "input",
+                 "render",
+                 "-",
+                 "--env-file",
+                 env_file,
+                 "--var",
+                 "LABEL=Café 🌍",
+                 "--json"
+               ],
+               template
+             )
+
+    assert Jason.decode!(input)["label"] == "Café 🌍"
+    assert File.read!(env_file) == settings
     assert {_, "", 0} = run(["grant", "validate", "-", "--json"], input)
     assert {"", stderr, 2} = run(["grant", "validate", "-"], <<255>>)
     assert stderr =~ "Error:"
     assert {"", _, 2} = run(["wallet", "get", "--yes"])
+  end
+
+  test "callback checking works offline with pasted whitespace and preserves the saved session",
+       c do
+    directory = Path.dirname(c.key)
+    path = Path.join(directory, "session.json")
+    callback = Path.join(directory, "callback.txt")
+    uri = "https://client.example/return?state=consumer"
+
+    session = %{
+      "version" => 1,
+      "kind" => "grant-request",
+      "state" => "ready",
+      "wallet_address" => "https://client.example/signer",
+      "key_id" => "consumer-key",
+      "grant_endpoint" => "https://server.example.com/tx",
+      "received_at" => DateTime.utc_now() |> DateTime.add(-1) |> DateTime.to_iso8601(),
+      "finish" => %{"method" => "redirect", "uri" => uri, "nonce" => "VJLO6A4CATR0KRO"},
+      "response" => %{
+        "continue" => %{
+          "uri" => "https://auth.example/continue",
+          "wait" => 0,
+          "access_token" => %{"value" => "consumer-continuation-secret"}
+        },
+        "interact" => %{
+          "redirect" => "https://auth.example/consent",
+          "finish" => "MBDOFXG4Y5CVJCX821LH"
+        }
+      }
+    }
+
+    original = Jason.encode!(session)
+    File.write!(path, original)
+    File.chmod!(path, 0o600)
+
+    url =
+      uri <>
+        "&" <>
+        URI.encode_query(%{
+          "hash" => "x+gguKWTj8rQf7d7i3w3UhzvuJ5bpOlKyAlVpLxBffY=",
+          "interact_ref" => "4IFWWIKYB2PQ6U56NL1"
+        })
+
+    File.write!(callback, "\n  " <> url <> "\n\n")
+    File.chmod!(callback, 0o600)
+    for name <- ~w(KEY_ID PRIVATE_KEY_FILE), do: System.delete_env(name)
+
+    assert {"{\"valid\":true}\n", "", 0} =
+             run(["grant", "verify-callback", path, "--callback-file", callback, "--json"])
+
+    assert {"Valid interaction callback\n", "", 0} =
+             run(
+               ["grant", "verify-callback", path, "--callback-file", "-"],
+               " \n" <> url <> "\n\n"
+             )
+
+    assert {"", stderr, 2} =
+             run(
+               ["grant", "verify-callback", path, "--callback-file", "-"],
+               String.replace(url, "state=consumer", "state=other")
+             )
+
+    assert stderr =~ "payment direction and consent stage"
+    assert File.read!(path) == original
+    refute File.exists?(path <> ".lock")
   end
 
   test "production archive contains application code and resources only" do

@@ -18,7 +18,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentAuthorization do
     do: invalid("Supply a private payment-session file.")
 
   def run(path, source, options) do
-    with {:ok, data} <- Input.json(source, "sender authorization") do
+    with {:ok, data} <- Input.json(source, "sender authorization", options) do
       from_map(path, data, options)
     else
       {:error, message} -> invalid(message)

@@ -57,7 +57,7 @@ defmodule OpenPaymentsSnippets.Commands.OutgoingPayments do
   @spec create(String.t() | nil, keyword()) ::
           {:ok, OutgoingPaymentWithSpentAmounts.t()} | {:error, Error.t() | String.t()}
   def create(source, options) do
-    with {:ok, data} <- Input.json(source, "outgoing-payment request"),
+    with {:ok, data} <- Input.json(source, "outgoing-payment request", options),
          {:ok, request} <- CreateOutgoingPayment.from_map(data),
          {:ok, token} <- Config.access_token(options),
          {:ok, client, _key} <- Config.authenticated_client(options),

@@ -21,6 +21,7 @@ defmodule OpenPaymentsSnippets.CLI do
   alias OpenPayments.Types.IncomingPayment, as: IncomingPaymentData
   alias OpenPayments.Types.Quote, as: QuoteData
   alias OpenPayments.Types.OutgoingPayment, as: OutgoingPaymentData
+  alias OpenPaymentsSnippets.{Environment, GrantCallback, Input}
 
   alias OpenPaymentsSnippets.Commands.{
     GrantCancellation,
@@ -46,6 +47,7 @@ defmodule OpenPaymentsSnippets.CLI do
   Commands:
     help                Show this help
     version             Show CLI, SDK, and Open Payments specification versions
+    input render <file|-> Resolve JSON template variables without making an HTTP request
     wallet get [address] Fetch public wallet information using a URL or payment pointer
     wallet keys [address] Fetch the wallet's public JSON Web Key Set
     incoming get-public <url> Fetch public incoming-payment details
@@ -71,6 +73,7 @@ defmodule OpenPaymentsSnippets.CLI do
     grant validate <file|-> Validate grant-request JSON offline
     grant request <file|-> Discover the auth server and request a signed grant
     grant continue <session> Continue a saved grant once and update its private session
+    grant verify-callback <session> Check a returned callback offline without continuing the grant
     grant cancel <session> Cancel a saved grant and mark its private session cancelled
     token rotate <session> Rotate the issued token in a private grant session
     token revoke <session> Revoke the issued token and remove it from the private session
@@ -80,6 +83,8 @@ defmodule OpenPaymentsSnippets.CLI do
     -h, --help          Show help
     -v, --version       Show version information
     --json              Format results as JSON
+    --env-file <path>   Load literal environment assignments (repeatable; shell values take precedence)
+    --var NAME=value    Override a JSON template variable (repeatable; input commands only)
     --allow-http        Allow HTTP development URLs for resource/grant requests
     --key-id <id>       Override KEY_ID for key commands or authenticated requests
     --key-file <path>   Select a PEM file for key commands or authenticated requests
@@ -90,7 +95,7 @@ defmodule OpenPaymentsSnippets.CLI do
     --first <count>     Request 1-100 items forward with incoming/outgoing list
     --last <count>      Request 1-100 items backward with incoming/outgoing list
     --cursor <value>    Supply an opaque pagination cursor with incoming/outgoing list
-    --callback-file <path|-> Read the returned callback URL for grant continue/payment finalize
+    --callback-file <path|-> Read the return URL for grant continue/verify-callback/payment finalize
     --hash-encoding <profile> Callback hash encoding: base64 (default) or base64url
     --yes               Confirm new outgoing creation with payment finish/finalize
 
@@ -127,7 +132,9 @@ defmodule OpenPaymentsSnippets.CLI do
           last: :integer,
           cursor: :string,
           callback_file: :string,
-          hash_encoding: :string
+          hash_encoding: :string,
+          env_file: :keep,
+          var: :keep
         ],
         aliases: [h: :help, v: :version]
       )
@@ -135,6 +142,9 @@ defmodule OpenPaymentsSnippets.CLI do
     with [] <- invalid,
          {:ok, command} <- command(arguments) do
       cond do
+        Keyword.has_key?(options, :var) && not input_command?(command) ->
+          argument_error("The --var option requires a JSON input command.")
+
         (options[:help] && options[:version]) || (command == :help && options[:version]) ->
           argument_error("Choose either help or version.")
 
@@ -174,7 +184,9 @@ defmodule OpenPaymentsSnippets.CLI do
 
         Enum.any?([:callback_file, :hash_encoding], &Keyword.has_key?(options, &1)) &&
             not callback_command?(command) ->
-          argument_error("Callback options require grant continue or payment finalize.")
+          argument_error(
+            "Callback options require grant continue, grant verify-callback or payment finalize."
+          )
 
         options[:hash_encoding] not in [nil, "base64", "base64url"] ->
           argument_error("Hash encoding must be base64 or base64url.")
@@ -186,7 +198,10 @@ defmodule OpenPaymentsSnippets.CLI do
           print_help(Keyword.get(options, :json, false))
 
         true ->
-          execute(command, options)
+          case Environment.prepare(options) do
+            {:ok, options} -> execute(command, options)
+            {:error, message} -> argument_error(message)
+          end
       end
     else
       [_ | _] -> argument_error("Unknown option or invalid option value.")
@@ -197,6 +212,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command([]), do: {:ok, :default}
   defp command(["help"]), do: {:ok, :help}
   defp command(["version"]), do: {:ok, :version}
+  defp command(["input", "render"]), do: {:ok, {:input, :render, nil}}
+  defp command(["input", "render", source]), do: {:ok, {:input, :render, source}}
   defp command(["wallet", "get"]), do: {:ok, {:wallet, :get, nil}}
   defp command(["wallet", "get", address]), do: {:ok, {:wallet, :get, address}}
   defp command(["wallet", "keys"]), do: {:ok, {:wallet, :keys, nil}}
@@ -236,6 +253,11 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["grant", "request", source]), do: {:ok, {:grant, :request, source}}
   defp command(["grant", "continue"]), do: {:ok, {:grant, :continue, nil}}
   defp command(["grant", "continue", session]), do: {:ok, {:grant, :continue, session}}
+  defp command(["grant", "verify-callback"]), do: {:ok, {:grant, :verify_callback, nil}}
+
+  defp command(["grant", "verify-callback", session]),
+    do: {:ok, {:grant, :verify_callback, session}}
+
   defp command(["grant", "cancel"]), do: {:ok, {:grant, :cancel, nil}}
   defp command(["grant", "cancel", session]), do: {:ok, {:grant, :cancel, session}}
   defp command(["token", "rotate"]), do: {:ok, {:token, :rotate, nil}}
@@ -319,11 +341,22 @@ defmodule OpenPaymentsSnippets.CLI do
   defp output_command?({:payment, :initialize, _}), do: true
   defp output_command?(_command), do: false
 
+  defp input_command?({:input, :render, _}), do: true
+  defp input_command?({:grant, operation, _}) when operation in [:request, :validate], do: true
+
+  defp input_command?({resource, :create, _}) when resource in [:incoming, :outgoing, :quote],
+    do: true
+
+  defp input_command?({:payment, operation, _}) when operation in [:start, :initialize], do: true
+  defp input_command?({:payment, :authorize, _, _}), do: true
+  defp input_command?(_), do: false
+
   defp confirmation_command?({:payment, operation, _}) when operation in [:finish, :finalize],
     do: true
 
   defp confirmation_command?(_command), do: false
   defp callback_command?({:grant, :continue, _}), do: true
+  defp callback_command?({:grant, :verify_callback, _}), do: true
   defp callback_command?({:payment, :finalize, _}), do: true
   defp callback_command?(_command), do: false
 
@@ -336,7 +369,18 @@ defmodule OpenPaymentsSnippets.CLI do
   defp execute(:version, options), do: print_version(Keyword.get(options, :json, false))
 
   defp execute({:wallet, operation, address}, options) do
-    get_resource(operation, address || System.get_env("WALLET_ADDRESS"), options)
+    get_resource(operation, address || Environment.get(options, "WALLET_ADDRESS"), options)
+  end
+
+  defp execute({:input, :render, source}, options) do
+    case Input.json(source, "input template", options) do
+      {:ok, result} ->
+        IO.puts(Jason.encode!(result, pretty: not Keyword.get(options, :json, false)))
+        0
+
+      {:error, message} ->
+        argument_error(message)
+    end
   end
 
   defp execute({:incoming, :get_public, url}, options),
@@ -389,7 +433,7 @@ defmodule OpenPaymentsSnippets.CLI do
   end
 
   defp execute({:grant, :validate, source}, options) do
-    case Grants.validate(source) do
+    case Grants.validate(source, options) do
       {:ok, result} ->
         output =
           if Keyword.get(options, :json, false),
@@ -401,6 +445,17 @@ defmodule OpenPaymentsSnippets.CLI do
 
       {:error, message} ->
         argument_error(message)
+    end
+  end
+
+  defp execute({:grant, :verify_callback, session}, options) do
+    case GrantCallback.verify(session, options) do
+      {:ok, result} ->
+        IO.puts(if options[:json], do: Jason.encode!(result), else: "Valid interaction callback")
+        0
+
+      error ->
+        print_session_result(error, options, "Callback")
     end
   end
 

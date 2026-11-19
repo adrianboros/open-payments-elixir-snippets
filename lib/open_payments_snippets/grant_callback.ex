@@ -3,6 +3,24 @@ defmodule OpenPaymentsSnippets.GrantCallback do
 
   alias OpenPayments.Interaction
   alias OpenPayments.Types.{GrantResponse, InteractionFinish}
+  alias OpenPaymentsSnippets.GrantSession
+
+  @spec verify(String.t() | nil, keyword()) :: {:ok, map()} | {:error, term()}
+  def verify(path, options) do
+    if Keyword.has_key?(options, :callback_file) do
+      GrantSession.transaction(path, fn _path, session ->
+        with {:ok, response, _received} <- GrantSession.validate(session),
+             {:ok, _payload, true} <- payload(session, response, options) do
+          {:ok, %{valid: true}}
+        else
+          {:ok, _, _} -> invalid("This session has no pending interaction callback to verify.")
+          error -> error
+        end
+      end)
+    else
+      invalid("Supply --callback-file with the returned callback URL, or - for stdin.")
+    end
+  end
 
   @spec payload(map(), struct(), keyword()) :: {:ok, map() | nil, boolean()} | {:error, term()}
   def payload(session, response, options) do
@@ -69,8 +87,9 @@ defmodule OpenPaymentsSnippets.GrantCallback do
 
     case result do
       {:ok, value} ->
-        ending = if String.ends_with?(value, "\r\n"), do: "\r\n", else: "\n"
-        {:ok, String.replace_suffix(value, ending, "")}
+        if String.valid?(value),
+          do: {:ok, String.trim(value)},
+          else: invalid("Callback file must contain a UTF-8 URL.")
 
       _ ->
         invalid("Unable to read interaction callback.")
@@ -80,22 +99,58 @@ defmodule OpenPaymentsSnippets.GrantCallback do
   defp callback_values(expected, returned) do
     with {:ok, original} <- parse_uri(expected),
          {:ok, actual} <- parse_uri(returned),
-         true <- %{original | query: nil} == %{actual | query: nil},
+         :ok <-
+           require_callback(
+             %{original | query: nil} == %{actual | query: nil},
+             "Callback destination does not match this session's finish URL. Use the return URL from the correct consent flow."
+           ),
          {:ok, fixed} <- query(original.query),
          {:ok, values} <- query(actual.query),
-         false <-
-           Enum.any?(fixed, fn {name, _} ->
-             name in ["hash", "interact_ref", "error", "result"]
-           end),
-         [{"hash", hash}] <- Enum.filter(values, fn {name, _} -> name == "hash" end),
-         [{"interact_ref", reference}] <-
-           Enum.filter(values, fn {name, _} -> name == "interact_ref" end),
-         true <-
-           Enum.sort(Enum.reject(values, fn {name, _} -> name in ["hash", "interact_ref"] end)) ==
-             Enum.sort(fixed) do
+         :ok <-
+           require_callback(
+             not Enum.any?(fixed, fn {name, _} ->
+               name in ["hash", "interact_ref", "error", "result"]
+             end),
+             "The saved finish URL uses reserved callback parameters. Start a new grant with a clean finish URL."
+           ),
+         :ok <-
+           require_callback(
+             not Enum.any?(values, fn {name, _} -> name in ["error", "result"] end),
+             "The callback reports an error or result instead of a successful interaction. No continuation was sent."
+           ),
+         {:ok, hash} <- single_parameter(values, "hash"),
+         {:ok, reference} <- single_parameter(values, "interact_ref"),
+         :ok <-
+           require_callback(
+             Enum.sort(Enum.reject(values, fn {name, _} -> name in ["hash", "interact_ref"] end)) ==
+               Enum.sort(fixed),
+             "Callback query parameters do not match this session. Check the payment direction and consent stage."
+           ) do
       {:ok, reference, hash}
     else
-      _ -> invalid("Invalid interaction callback URL or parameters.")
+      {:error, {:argument, _}} = error ->
+        error
+
+      {:error, :query} ->
+        invalid("Callback query contains invalid percent encoding or UTF-8.")
+
+      _ ->
+        invalid("Callback must contain one complete, unbroken URL without quotes or extra text.")
+    end
+  end
+
+  defp require_callback(true, _message), do: :ok
+  defp require_callback(false, message), do: invalid(message)
+
+  defp single_parameter(values, name) do
+    case Enum.filter(values, fn {key, _} -> key == name end) do
+      [{^name, value}] when value != "" ->
+        {:ok, value}
+
+      _ ->
+        invalid(
+          "Callback must contain exactly one nonempty hash and one interact_ref. Copy the full return URL."
+        )
     end
   end
 

@@ -3,6 +3,7 @@ defmodule OpenPaymentsSnippets.Commands.Keys do
 
   alias OpenPayments.{Error, Key}
   alias OpenPayments.Types.{JWK, JWKS}
+  alias OpenPaymentsSnippets.Environment
 
   @spec validate(keyword()) :: {:ok, %{valid: true, key_id: String.t()}} | {:error, String.t()}
   def validate(options) do
@@ -36,7 +37,7 @@ defmodule OpenPaymentsSnippets.Commands.Keys do
   end
 
   defp key_id(options) do
-    case Keyword.get(options, :key_id, System.get_env("KEY_ID")) do
+    case Keyword.get(options, :key_id, Environment.get(options, "KEY_ID")) do
       nil -> {:error, "Supply --key-id or set KEY_ID."}
       value -> {:ok, value}
     end
@@ -45,12 +46,13 @@ defmodule OpenPaymentsSnippets.Commands.Keys do
   defp key_source(options) do
     case Keyword.fetch(options, :key_file) do
       {:ok, path} -> {:ok, {:file, path}}
-      :error -> environment_source()
+      :error -> environment_source(options)
     end
   end
 
-  defp environment_source do
-    case {System.get_env("PRIVATE_KEY_FILE", ""), System.get_env("PRIVATE_KEY_BASE64", "")} do
+  defp environment_source(options) do
+    case {Environment.get(options, "PRIVATE_KEY_FILE", ""),
+          Environment.get(options, "PRIVATE_KEY_BASE64", "")} do
       {"", ""} ->
         {:error, "Supply --key-file or set PRIVATE_KEY_FILE or PRIVATE_KEY_BASE64."}
 

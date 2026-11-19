@@ -1,0 +1,26 @@
+{
+  "sender": {
+    "$var": "SENDER_WALLET_ADDRESS"
+  },
+  "receiver": {
+    "$var": "RECEIVER_WALLET_ADDRESS"
+  },
+  "receiveAmount": {
+    "value": {
+      "$var": "RECEIVE_VALUE"
+    },
+    "assetCode": {
+      "$var": "RECEIVER_ASSET_CODE"
+    },
+    "assetScale": {
+      "$var": "RECEIVER_ASSET_SCALE",
+      "type": "integer"
+    }
+  },
+  "finishUri": {
+    "$var": "RECEIVER_FINISH_URI"
+  },
+  "metadata": {
+    "description": "Open Payments via Elixir SDK - staged payment"
+  }
+}

@@ -46,10 +46,49 @@ defmodule OpenPaymentsSnippets.PaymentMacrosTest do
   end
 
   @tag :consumer_flow
-  test "immediate grants chain six initialization calls and pipe the descriptor into one confirmed outgoing creation",
+  test "the cross-wallet example uses env files and overrides, chains six calls and pipes into confirmed outgoing creation",
        c do
-    base = server(c.path)
-    assert {stdout, "", 0} = invoke(initialize(c.path), Jason.encode!(request(base)))
+    base = server(c.path, client_role: "receiver")
+    settings = Path.join(c.directory, "scenario.env")
+
+    File.write!(settings, """
+    WALLET_ADDRESS='#{base}/wallets/receiver'
+    KEY_ID='test-key'
+    PRIVATE_KEY_FILE='#{c.key}'
+    WALLET_ASSET_CODE=USD
+    WALLET_ASSET_SCALE=2
+    SENDER_WALLET_ADDRESS='#{base}/wallets/sender'
+    SENDER_ASSET_CODE=USD
+    SENDER_ASSET_SCALE=2
+    RECEIVER_WALLET_ADDRESS='#{base}/wallets/receiver'
+    RECEIVER_ASSET_CODE=EUR
+    RECEIVER_ASSET_SCALE=2
+    RECEIVE_VALUE=1
+    MAX_DEBIT_VALUE=200
+    RECEIVER_FINISH_URI='https://client.example/return?state=receiver'
+    SENDER_FINISH_URI='https://client.example/return?state=sender'
+    """)
+
+    File.chmod!(settings, 0o600)
+    for name <- ~w(WALLET_ADDRESS KEY_ID PRIVATE_KEY_FILE), do: System.delete_env(name)
+    flags = ["--env-file", settings]
+    template = Path.expand("../../examples/payment-cross-wallet.json", __DIR__)
+
+    assert {stdout, "", 0} =
+             invoke(
+               [
+                 "payment",
+                 "initialize",
+                 template,
+                 "--output",
+                 c.path,
+                 "--json",
+                 "--allow-http",
+                 "--var",
+                 "RECEIVE_VALUE=100"
+               ] ++ flags
+             )
+
     result = Jason.decode!(stdout)
     assert result["stage"] == "quote-ready" and result["scenario"] == "quote-payment"
     assert result["saved"]
@@ -62,6 +101,8 @@ defmodule OpenPaymentsSnippets.PaymentMacrosTest do
            ]
 
     saved = load(c.path)
+    assert saved["wallet_address"] == base <> "/wallets/receiver"
+    assert saved["payment"]["sender_wallet"]["id"] == base <> "/wallets/sender"
 
     assert saved["payment"]["scenario"]["sender_authorization"] ==
              request(base)["senderAuthorization"]
@@ -75,7 +116,10 @@ defmodule OpenPaymentsSnippets.PaymentMacrosTest do
     assert length(drain()) == 6
 
     assert {stdout, "", 0} =
-             invoke(["payment", "finalize", "-", "--yes", "--json", "--allow-http"], stdout)
+             invoke(
+               ["payment", "finalize", "-", "--yes", "--json", "--allow-http"] ++ flags,
+               stdout
+             )
 
     result = Jason.decode!(stdout)
     assert result["stage"] == "outgoing-created" and result["saved"]
@@ -86,7 +130,7 @@ defmodule OpenPaymentsSnippets.PaymentMacrosTest do
                      %{method: :POST, target: "/resources/sender/outgoing-payments"}}
 
     before = File.read!(c.path)
-    assert {stdout, "", 0} = invoke(finalize(c.path))
+    assert {stdout, "", 0} = invoke(finalize(c.path) ++ flags)
     assert Jason.decode!(stdout)["saved"] == false
     assert File.read!(c.path) == before
     assert File.read!(c.key) == @pem
@@ -324,6 +368,9 @@ defmodule OpenPaymentsSnippets.PaymentMacrosTest do
           %{},
           Map.delete(request(base), "senderAuthorization"),
           Map.put(request(base), "unknown", true),
+          Map.put(request(base), "sender", nil),
+          Map.put(request(base), "sender", ""),
+          Map.put(request(base), "sender", 1),
           put_in(request(base), ["senderAuthorization", "debitAmount", "value"], 1.5),
           put_in(request(base), ["senderAuthorization", "finishUri"], "not-uri"),
           Map.put(request(base), "receiveAmount", nil)
@@ -609,7 +656,7 @@ defmodule OpenPaymentsSnippets.PaymentMacrosTest do
                   else: "sender"
 
               Process.put({:access, role}, data["access_token"]["access"])
-              assert data["client"] == base <> "/wallets/sender"
+              assert data["client"] == base <> "/wallets/" <> (options[:client_role] || "sender")
 
               if role == "sender" do
                 assert Enum.map(data["access_token"]["access"], & &1["type"]) == [

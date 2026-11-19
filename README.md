@@ -51,7 +51,15 @@ are `WALLET_ADDRESS`, `KEY_ID`, and `PRIVATE_KEY_FILE`. You can instead set
 Git ignores `.env` and its local variants. The tracked `.env.example` contains
 placeholders. Keep the private key file outside the repository.
 
-Load your `.env` into the current shell from the project root.
+Load your `.env` explicitly for each command (the file is never loaded automatically):
+
+```sh
+./open-payments wallet get --env-file .env
+./open-payments wallet keys --env-file .env
+./open-payments keys validate --env-file .env
+```
+
+Alternatively, load it into the current shell from the project root.
 
 ```sh
 set -a
@@ -60,8 +68,8 @@ set +a
 ```
 
 `wallet get` and `wallet keys` use the exported `WALLET_ADDRESS` when no address
-argument is supplied. These public operations require no signing key. Automatic
-`.env` loading remains pending, so load the file into your shell before invoking it.
+argument is supplied. These public operations require no signing key.
+Environment-file loading is opt-in: use `--env-file .env` or load it into your shell.
 
 ## Commands and output
 
@@ -70,6 +78,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments`, `open-payments help`, `open-payments --help`, `open-payments -h` | Usage and available commands |
 | `open-payments version`, `open-payments --version`, `open-payments -v` | CLI version, SDK version, Open Payments specification version and revision |
 | `open-payments version --json` | The same version data as a JSON object |
+| `open-payments input render <file\|-> [--env-file <path>] [--var NAME=value]` | Preview a JSON template with resolved values, without HTTP |
 | `open-payments wallet get [address]` | Fetch and validate public wallet information |
 | `open-payments wallet get [address] --json` | Public wallet information with the SDK's JSON field mappings |
 | `open-payments wallet keys [address]` | Fetch and validate the wallet's public JWKS, displayed as formatted JSON |
@@ -95,6 +104,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments grant validate - --json` | Validate grant-request JSON from stdin and return a summary |
 | `open-payments grant request <file\|-> --output <path>` | Discover the authorization server, request a signed grant, and save private session state |
 | `open-payments grant continue <session>` | Continue once using saved continuation credentials and update the private session |
+| `open-payments grant verify-callback <session> --callback-file <path\|->` | Check a callback URL and hash offline without continuing or changing the session |
 | `open-payments grant cancel <session>` | Cancel using saved continuation credentials and mark the private session cancelled |
 | `open-payments token rotate <session>` | Rotate the issued access token and save its replacement in the private grant session |
 | `open-payments token revoke <session>` | Revoke the issued access token and remove it from the private grant session |
@@ -118,11 +128,164 @@ Key-set JSON contains a `keys` array of public JWK objects using the SDK's
 encoders. Empty sets and duplicate key IDs retain the SDK's supported behavior.
 
 Options accept standard boolean values and negation. `--json` applies to version,
-wallet, incoming-payment, quote, key-command, grant, and pointer results. Unknown commands, extra arguments, conflicting help/version requests,
+wallet, incoming-payment, quote, key-command, grant, pointer, and rendered-input results. Unknown commands, extra arguments, conflicting help/version requests,
 and unknown or invalid options produce diagnostics. See the [OptionParser documentation](https://elixir.hexdocs.pm/OptionParser.html).
 
 Results go to stdout. Diagnostics go to stderr. Exit statuses are 0 for success,
 1 for operation/runtime failures, and 2 for argument/configuration errors.
+
+## Example files and scenario parameters
+
+The tracked [examples](examples/) contain JSON templates for the payment macros,
+individual staged inputs, incoming payments, quotes, outgoing payments and grants.
+Payment templates label `metadata.description` with `Open Payments via Elixir SDK`
+and the scenario name. Use a fresh initialization to apply updated example metadata.
+Prepare a separate local scenario file alongside your existing wallet credentials:
+
+```sh
+cp examples/scenarios.env.example .env.scenarios
+```
+
+Edit the local values to match the wallets and callbacks you control. If a local
+`.env.scenarios` already exists, keep it and update the needed fields. The root
+`.env.scenarios` is ignored by Git. Signing settings stay in `.env`.
+`WALLET_ADDRESS` identifies the client that owns the signing key. An optional
+`sender` field in `payment start` and `payment initialize` selects the paying
+wallet independently; it defaults to the signing client wallet when omitted.
+The sender owner authorizes the outgoing grant. This lets one registered client
+key exercise payments in both directions without replacing its identity.
+
+`--env-file` is repeatable. Later files override earlier files, exported shell
+values override files, and existing command flags override their corresponding
+settings. Files contain literal `NAME=value` assignments, optional `export`, blank
+lines and comments. Single or double quotes preserve their contents. Shell
+expressions, variable interpolation, escape sequences and multiline values are
+not evaluated; quote a payment pointer such as `'$wallet.example/alice'` literally.
+No environment values are changed in the calling shell.
+
+A JSON reference `{"$var": "RECEIVE_VALUE"}` inserts one string value, so amounts
+remain integer strings. `{"$var": "WALLET_ASSET_SCALE", "type": "integer"}` inserts
+an integer. References work inside objects and arrays; ordinary strings remain
+literal. Values are inserted after JSON parsing, preserving quotes, dollar signs
+and Unicode. Missing variables and invalid types fail before HTTP. Known signing
+credential and access-token settings cannot be rendered into payloads.
+
+Use `--var NAME=value` to override a payload variable for one invocation. It takes
+precedence over files and shell variables; repeated values use the last one.
+These overrides apply to JSON inputs and do not change signing configuration.
+They are accepted by `input render`, `grant validate/request`, resource creation,
+`payment start/authorize`, and `payment initialize`.
+
+The finish URI is chosen **before** requesting a grant. For manual local testing,
+you can use `http://localhost:3000/callback?stage=receiver` and a separate
+`?stage=sender` URI. After approval, the authorization server redirects to that
+URI with `hash` and `interact_ref` appended. If no local server is running, the
+browser may show a connection error; copy the complete URL from its address bar
+into your callback file. Pass that file to `payment finalize --callback-file`.
+Keep the original finish URI in the saved session unchanged. The CLI verifies
+the returned URL and hash against it. Each interactive grant has its own callback.
+
+For a self-payment preview, set `WALLET_ASSET_CODE` and `WALLET_ASSET_SCALE` from
+`wallet get`, plus `RECEIVER_FINISH_URI` and `SENDER_FINISH_URI` in `.env.scenarios`:
+
+```sh
+./open-payments input render examples/payment-self.json \
+  --env-file .env --env-file .env.scenarios \
+  --var RECEIVE_VALUE=1 --var MAX_DEBIT_VALUE=2
+```
+
+This renders JSON without making an HTTP call. `1` means one smallest asset unit
+(for EUR scale 2, EUR 0.01); `MAX_DEBIT_VALUE` is the sender grant's debit limit,
+including room for any fees. The provider determines available routes and fees.
+Use values appropriate to your test, and inspect the rendered intent first.
+
+The same template can run directly, without saving a rendered copy:
+
+```sh
+./open-payments payment initialize examples/payment-self.json \
+  --env-file .env --env-file .env.scenarios \
+  --var RECEIVE_VALUE=1 --var MAX_DEBIT_VALUE=2 \
+  --output '/absolute/private/directory/self-session.json' --json
+```
+
+This creates real grants and payment setup resources. Resume pending consent with
+the saved session and returned callback. When it reaches quote readiness, inspect
+the quote before finalization:
+
+```sh
+./open-payments payment finalize '/absolute/private/directory/self-session.json' \
+  --env-file .env --callback-file '/absolute/private/directory/callback.txt'
+# Once consent is complete, omit --callback-file; finalization prompts before sending.
+./open-payments payment finalize '/absolute/private/directory/self-session.json' \
+  --env-file .env
+```
+
+Use `payment-cross-wallet.json` for a different receiver. Set its address, asset
+code and scale in `.env.scenarios`. Both macros handle separate receiver/sender
+consent. Initialization requires a fresh output path for each scenario.
+
+| File | Command | Required scenario data |
+| --- | --- | --- |
+| `payment-self.json` | `payment initialize` | Sender asset, receive value, maximum debit, both callbacks; receiver uses `WALLET_ADDRESS` |
+| `payment-cross-wallet.json` | `payment initialize` | Sender/receiver addresses and assets, amounts and callbacks |
+| `payment-start.json` | `payment start` | Sender/receiver addresses, receiver asset/value, receiver callback |
+| `sender-authorization.json` | `payment authorize <session>` | Sender asset, maximum debit, sender callback |
+| `incoming-payment.json` | `incoming create` | Receiver wallet URL/asset and receive value |
+| `quote.json` | `quote create` | Sender wallet URL, incoming-payment URL, receiver asset/value |
+| `outgoing-payment.json` | `outgoing create` | Sender wallet URL and quote URL |
+| `grant.json` | `grant validate` or `grant request` | Canonical signing-client wallet URL |
+
+Low-level payload fields named `walletAddress` or `client` require absolute wallet
+URLs; use the canonical `id` returned by `wallet get` for `SENDER_WALLET_URL`,
+`RECEIVER_WALLET_URL` and the signing identity's `CLIENT_WALLET_URL`. Macro receiver inputs accept payment pointers. Resource
+creation commands need their correctly scoped `ACCESS_TOKEN` or token file;
+macros use the tokens issued to their private session. Rendering checks JSON and
+variables; operation commands and `grant validate` perform SDK validation.
+
+### Running both directions with one signing client
+
+Keep `WALLET_ADDRESS` and the matching key in `.env`. Direction-specific local
+files such as `.env.gbp-to-eur` and `.env.eur-to-gbp` set
+`SENDER_WALLET_ADDRESS`, `SENDER_ASSET_CODE`, `SENDER_ASSET_SCALE`, the receiver
+address/asset, `RECEIVE_VALUE`, and both finish URIs. They must not override the
+signing client's `WALLET_ADDRESS`. Use the `payment-cross-wallet.json` template.
+For example, receive value `125` means EUR 1.25 in the first direction and GBP
+1.25 in the reverse direction when both asset scales are 2. A GBP debit cap of
+12000 means GBP 120; choose a separate EUR cap for the reverse scenario.
+
+```sh
+SESSION_DIR="$(mktemp -d)"
+./open-payments payment initialize examples/payment-cross-wallet.json \
+  --env-file .env --env-file .env.gbp-to-eur \
+  --output "$SESSION_DIR/gbp-to-eur.json"
+
+printf 'Maximum EUR debit in cents: '
+IFS= read -r EUR_CAP_MINOR
+./open-payments payment initialize examples/payment-cross-wallet.json \
+  --env-file .env --env-file .env.eur-to-gbp \
+  --var "MAX_DEBIT_VALUE=$EUR_CAP_MINOR" \
+  --output "$SESSION_DIR/eur-to-gbp.json"
+```
+
+Initialization stops at consent or quote readiness. Open a returned consent URL,
+approve it, then capture the full localhost redirect URL. To resume the first
+scenario (use `eur-to-gbp.json` for the reverse):
+
+```sh
+umask 077
+printf 'Paste the full localhost callback URL: '
+IFS= read -r CALLBACK_URL
+printf '%s\n' "$CALLBACK_URL" > "$SESSION_DIR/callback.txt"
+./open-payments grant verify-callback "$SESSION_DIR/gbp-to-eur.json" \
+  --callback-file "$SESSION_DIR/callback.txt"
+./open-payments payment finalize "$SESSION_DIR/gbp-to-eur.json" \
+  --env-file .env --callback-file "$SESSION_DIR/callback.txt"
+```
+
+If another consent URL is returned, repeat with its new callback. If initialization
+already returned a quote, run `payment finalize` on that session without
+`--callback-file`. Finalization shows the quote and asks you to type `send` before
+outgoing creation. These commands execute provider calls when you run them.
 
 ## Payment-pointer conversion
 
@@ -264,7 +427,7 @@ incoming-payment `create` permission for the receiving wallet's resource server.
 {
   "walletAddress": "https://wallet.example/receiver",
   "incomingAmount": {"value": "1000", "assetCode": "USD", "assetScale": 2},
-  "metadata": {"description": "Example payment"}
+  "metadata": {"description": "Open Payments via Elixir SDK"}
 }
 ```
 
@@ -467,7 +630,7 @@ Use either a quote-based payload:
 {
   "walletAddress": "https://wallet.example/sender",
   "quoteId": "https://payments.example/tenant/quotes/id",
-  "metadata": {"reference": "invoice-17"}
+  "metadata": {"reference": "invoice-17", "description": "Open Payments via Elixir SDK"}
 }
 ```
 
@@ -761,7 +924,7 @@ Save this combined request as `macro.json`:
   "receiver": "$wallet.example/receiver",
   "receiveAmount": {"value": "100", "assetCode": "EUR", "assetScale": 2},
   "finishUri": "https://client.example/return?state=receiver",
-  "metadata": {"description": "Example macro payment"},
+  "metadata": {"description": "Open Payments via Elixir SDK - macro payment"},
   "senderAuthorization": {
     "debitAmount": {"value": "200", "assetCode": "USD", "assetScale": 2},
     "finishUri": "https://client.example/return?state=sender"
@@ -769,7 +932,7 @@ Save this combined request as `macro.json`:
 }
 ```
 
-The outer fields are the `payment start` input; `metadata` is optional. The required
+The outer fields are the `payment start` input; `sender` and `metadata` are optional. The required
 `senderAuthorization` contains the debit limit and callback for `payment authorize`.
 Use callback URIs you control. The SDK validates protocol payloads, and the server
 enforces grant permissions, limits and quote validity.
@@ -850,12 +1013,13 @@ Save a payment request as JSON:
   "receiver": "$wallet.example/receiver",
   "receiveAmount": {"value": "100", "assetCode": "EUR", "assetScale": 2},
   "finishUri": "https://client.example/return?state=your-session-state",
-  "metadata": {"description": "Example payment"}
+  "metadata": {"description": "Open Payments via Elixir SDK"}
 }
 ```
 
-`receiver`, `receiveAmount` and `finishUri` are required; `metadata` is optional.
-Other fields are rejected. The receiver accepts a wallet URL or payment pointer.
+`receiver`, `receiveAmount` and `finishUri` are required. `sender` and `metadata`
+are optional; other fields are rejected. Both wallet inputs accept URLs or payment
+pointers. Without `sender`, the signing client wallet is the default payer.
 The SDK validates the amount and metadata using its incoming-payment model;
 `value` is an integer string in the receiver asset's smallest units. For EUR at
 scale 2, `"100"` means EUR 1.00. Supply a callback URI you control, with any session
@@ -871,9 +1035,10 @@ cat '/absolute/path/to/payment-request.json' | ./open-payments payment start - \
   --output '/absolute/private/directory/another-payment-session.json' --json
 ```
 
-`WALLET_ADDRESS` identifies the sender and registered signing key's wallet;
+`WALLET_ADDRESS` identifies the signing client and its registered key's wallet;
 `--wallet-address`, `--key-id` and `--key-file` provide the usual overrides.
-Receiver discovery does not replace that client identity. `ACCESS_TOKEN` is unused
+The optional JSON `sender` field selects the paying wallet independently; both
+sender and receiver discovery preserve the client identity. `ACCESS_TOKEN` is unused
 and `--access-token-file` is rejected. Local HTTP requires `--allow-http`.
 
 The command performs two unsigned wallet GETs followed by one SDK-signed grant
@@ -915,7 +1080,7 @@ receiver access token. Continuation credentials cannot replace it. If you rotate
 the token with `token rotate`, preparation uses the latest token in the session.
 The server enforces its permissions, expiry and signing-key binding.
 
-Wallet and key IDs default to the session's recorded sender identity, and explicit
+Wallet and key IDs default to the session's recorded signing client identity, and explicit
 overrides must match. Supply the original private key through the usual signing
 configuration. `ACCESS_TOKEN` is unused. The command rejects `--access-token-file`,
 `--output`, callback and pagination options. Local HTTP requires `--allow-http`.
@@ -1086,8 +1251,15 @@ The command requires stage `quote-ready` and an issued sender token. It checks t
 the saved quote's wallet and receiver match the recorded sender and incoming
 payment. The SDK validates a quote-based request containing `walletAddress` and
 `quoteId`, then sends one signed POST to the saved sender resource server using
-the latest sender token. There are no discovery, quote refresh, readback or polling
-requests. Signing identity defaults and overrides work as in the other flow steps;
+the latest sender token. Before confirmation, the CLI checks the quote against
+both the requested debit maximum and a matching outgoing-create permission in the
+issued token, including wallet, receiver, asset, scale and amount limits. An
+insufficient limit returns status 2 without a prompt, HTTP or session changes.
+For example, a quoted debit of 249 cents cannot fit a grant capped at 137 cents.
+Changing an environment value does not change a grant already issued: obtain a
+new authorization with a suitable cap after reconciling any prior attempt. The
+provider still enforces current grant spending, expiry and other permissions.
+There are no discovery, quote refresh, readback or polling requests. Signing identity defaults and overrides work as in the other flow steps;
 `ACCESS_TOKEN` is unused. Resource-token, output, callback and pagination flags are
 rejected. Local HTTP requires `--allow-http`.
 
@@ -1151,13 +1323,29 @@ then resume:
   --callback-file '/absolute/private/directory/callback.txt' --json
 ```
 
-`--callback-file -` reads the URL from stdin. A single trailing LF or CRLF is
-accepted. Callback URLs must match the stored destination and fixed query values,
+`--callback-file -` reads the URL from stdin. Surrounding whitespace and blank
+lines from manual editing are accepted. Paste one complete URL without quotes or
+Markdown; line breaks or spaces inside the URL remain invalid. Callback URLs
+must match the stored destination and fixed query values,
 with exactly one `hash` and `interact_ref`. Error/result fields, unexpected query
 values, duplicates and fragments are rejected. The CLI decodes query values once
 and asks the SDK to verify the hash against the saved client nonce, server nonce,
 interaction reference and exact initial grant endpoint. Copy the complete URL;
 manually decoding or rebuilding it can change the hash input.
+
+Before continuing a grant or finalizing a payment, check the callback offline:
+
+```sh
+./open-payments grant verify-callback '/absolute/private/directory/grant-session.json' \
+  --callback-file '/absolute/private/directory/callback.txt'
+```
+
+Success prints `Valid interaction callback` (or `{"valid":true}` with `--json`).
+This checks the exact saved destination/query and SDK callback hash with no signing
+key, HTTP request, grant continuation or session update. A consumed callback is
+rejected. Errors distinguish malformed text, the wrong destination, a different
+payment direction/consent stage, missing or duplicate parameters, and hash failure.
+The same callback can then be used for `grant continue` or `payment finalize`.
 
 Default `--hash-encoding base64` matches the SDK's deployed Open Payments profile.
 For a server using unpadded base64url, explicitly select
@@ -1369,14 +1557,15 @@ The default exports the sibling SDK's committed `HEAD` and prints its full commi
 ID. Select another local checkout or an available commit explicitly with
 `--sdk-path <directory>` and `--sdk-ref <revision>`. The check copies CLI source,
 tests and the lockfile, builds dependencies from scratch, compiles a production
-escript, runs `mix check`, then performs seven executable smoke tests and six
+escript, runs `mix check`, then performs eight executable smoke tests and six
 complete executable flows. Each subprocess runs outside the checkout with real
 stdin and separate stdout/stderr capture. Environment wallet credentials are
 cleared before testing; flow tests supply public keys and local simulated servers.
 The temporary SDK, CLI copy and build output are removed afterward.
 
-The smoke tests cover help/version, payment pointers, key loading/export, UTF-8
-stdin, error exits and production archive contents. The executable flows cover
+The smoke tests cover help/version, payment pointers, key loading/export, literal
+environment-file templates, UTF-8 stdin, offline callback verification, error exits
+and production archive contents. The executable flows cover
 both low-level payment variants, the staged flow through confirmed outgoing
 creation, and the macros with immediate grants, separate consent callbacks and
 a real self-payment shell pipeline. They also exercise token rotation/revocation
@@ -1400,7 +1589,7 @@ Verified with SDK commit `8d31b6f9ee7efab5b38601212b3ebc62841fed7c`:
 
 | Runtime | Isolated result |
 | --- | --- |
-| Linux Elixir 1.17.3 / OTP 26 | 350 runner tests, 7 executable smoke tests and 6 executable flows |
+| Linux Elixir 1.17.3 / OTP 26 | 368 runner tests, 8 executable smoke tests and 6 executable flows |
 | Linux Elixir 1.19.7 / OTP 28 | Same checks pass |
 | Linux Elixir 1.20.5 / OTP 29 | Same checks pass |
 | macOS Elixir 1.20.4 / OTP 29 | Same checks pass using an explicit Git export |
@@ -1415,7 +1604,7 @@ live authenticated-provider verification remain pending.
 [The CI workflow](.github/workflows/ci.yml) runs on pushes, pull requests and manual
 dispatch. Its Ubuntu 24.04 matrix covers Elixir/OTP 1.17/26, 1.19/28 and 1.20/29.
 Each job runs the isolated consumer check, including production executable build,
-350 runner tests, seven executable smoke tests and six complete executable flows.
+368 runner tests, eight executable smoke tests and six complete executable flows.
 
 CI checks out the public SDK at
 [`8d31b6f9ee7efab5b38601212b3ebc62841fed7c`](https://github.com/interledger/open-payments-elixir/commit/8d31b6f9ee7efab5b38601212b3ebc62841fed7c).

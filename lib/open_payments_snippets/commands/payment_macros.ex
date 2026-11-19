@@ -14,7 +14,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentMacros do
 
   @spec initialize(String.t() | nil, keyword()) :: {:ok, map()} | {:error, term()}
   def initialize(source, options) do
-    with {:ok, data} <- Input.json(source, "payment macro"),
+    with {:ok, data} <- Input.json(source, "payment macro", options),
          {:ok, payment, scenario} <- input(data),
          {:ok, result} <-
            PaymentStart.from_map(payment, Keyword.put(options, :scenario, scenario)) do
@@ -36,7 +36,10 @@ defmodule OpenPaymentsSnippets.Commands.PaymentMacros do
   defp input(data) when is_map(data) do
     with true <-
            map_size(
-             Map.drop(data, ~w(receiver receiveAmount finishUri metadata senderAuthorization))
+             Map.drop(
+               data,
+               ~w(sender receiver receiveAmount finishUri metadata senderAuthorization)
+             )
            ) == 0,
          {:ok, authorization, _finish} <-
            PaymentAuthorization.decode_input(data["senderAuthorization"]) do

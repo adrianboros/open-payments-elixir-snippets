@@ -15,7 +15,7 @@ defmodule OpenPaymentsSnippets.MixProject do
       aliases: [
         check: ["format --check-formatted", "compile --warnings-as-errors", "test"]
       ],
-      package: [files: ["lib", "mix.exs", "README.md"]]
+      package: [files: ["lib", "examples", "mix.exs", "README.md"]]
     ]
   end
 

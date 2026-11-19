@@ -137,7 +137,7 @@ defmodule ConsumerCheck do
   defp copy_cli!(destination) do
     File.mkdir!(destination)
 
-    for name <- ~w(mix.exs mix.lock .formatter.exs README.md lib test) do
+    for name <- ~w(mix.exs mix.lock .formatter.exs README.md lib test examples) do
       File.cp_r!(Path.join(@root, name), Path.join(destination, name))
     end
 

@@ -1,0 +1,21 @@
+{
+  "walletAddress": {
+    "$var": "SENDER_WALLET_URL"
+  },
+  "receiver": {
+    "$var": "INCOMING_PAYMENT_URL"
+  },
+  "receiveAmount": {
+    "value": {
+      "$var": "RECEIVE_VALUE"
+    },
+    "assetCode": {
+      "$var": "RECEIVER_ASSET_CODE"
+    },
+    "assetScale": {
+      "$var": "RECEIVER_ASSET_SCALE",
+      "type": "integer"
+    }
+  },
+  "method": "ilp"
+}

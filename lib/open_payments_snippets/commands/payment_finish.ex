@@ -4,6 +4,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentFinish do
   alias OpenPayments.{Error, OutgoingPayment}
 
   alias OpenPayments.Types.{
+    AccessOutgoing,
     AccessToken,
     Amount,
     CreateOutgoingPayment,
@@ -53,6 +54,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentFinish do
     with {:ok, incoming} <- IncomingPaymentWithMethods.from_map(payment["incoming_payment"]),
          {:ok, quote} <- QuoteData.from_map(payment["quote"]),
          true <- quote.wallet_address == sender.id and quote.receiver == incoming.id,
+         :ok <- authorized_quote(payment, token, quote, sender.id),
          {:ok, request} <-
            CreateOutgoingPayment.from_map(%{"walletAddress" => sender.id, "quoteId" => quote.id}),
          {:ok, confirmation} <- confirm(sender.id, incoming.id, quote, options) do
@@ -74,6 +76,49 @@ defmodule OpenPaymentsSnippets.Commands.PaymentFinish do
 
   defp prepare(_path, _session, _client, _token, _sender, _options),
     do: invalid("No issued sender token. Complete sender authorization before finishing.")
+
+  defp authorized_quote(payment, token, quote, sender_id) do
+    with {:ok, maximum} <-
+           Amount.from_map(get_in(payment, ["sender_authorization", "debitAmount"])) do
+      cond do
+        not within_limit?(quote.debit_amount, maximum) ->
+          invalid(
+            "Quote debit #{Jason.encode!(core(quote.debit_amount))} does not fit the requested maximum #{Jason.encode!(core(maximum))}. No outgoing request was sent; obtain a new authorization with a suitable limit."
+          )
+
+        not Enum.any?(token.access, &allows_quote?(&1, quote, sender_id)) ->
+          invalid(
+            "The issued token does not authorize this quote's sender, receiver or amounts. No outgoing request was sent; obtain a new authorization."
+          )
+
+        true ->
+          :ok
+      end
+    else
+      _ -> invalid("Invalid saved sender debit limit. No outgoing request was sent.")
+    end
+  end
+
+  defp allows_quote?(
+         %AccessOutgoing{identifier: sender_id, actions: actions, limits: limits},
+         quote,
+         sender_id
+       ) do
+    "create" in actions and
+      (is_nil(limits) or
+         ((is_nil(limits.receiver) or limits.receiver == quote.receiver) and
+            within_limit?(quote.debit_amount, limits.debit_amount) and
+            within_limit?(quote.receive_amount, limits.receive_amount)))
+  end
+
+  defp allows_quote?(_access, _quote, _sender_id), do: false
+
+  defp within_limit?(_amount, nil), do: true
+
+  defp within_limit?(amount, limit) do
+    amount.asset_code == limit.asset_code and amount.asset_scale == limit.asset_scale and
+      String.to_integer(amount.value) <= String.to_integer(limit.value)
+  end
 
   defp confirm(sender, incoming, quote, options) do
     cond do
