@@ -98,6 +98,7 @@ argument is supplied. These public operations require no signing key. Automatic
 | `open-payments token rotate <session>` | Rotate the issued access token and save its replacement in the private grant session |
 | `open-payments token revoke <session>` | Revoke the issued access token and remove it from the private grant session |
 | `open-payments payment start <file\|-> --output <path>` | Discover sender and receiver wallets and save initial receiver authorization |
+| `open-payments payment prepare <session>` | Create one incoming payment with the saved receiver grant and retain its private result |
 | `open-payments pointer resolve <pointer>` | Convert a quoted payment pointer to a URL offline |
 | `open-payments pointer resolve <pointer> --json` | Return the resolved URL in a JSON `url` field |
 
@@ -744,8 +745,9 @@ the server created a grant; review that outcome before submitting another reques
 
 `payment start` begins a payment by discovering both wallets and requesting a
 receiver grant with incoming-payment `create` and `read` permissions. This
-increment stops at receiver authorization. Creating incoming payments, requesting
-sender authorization, quoting and sending through `payment finish` remain planned.
+command stops at receiver authorization. Use `payment prepare` next to create
+the incoming payment. Sender authorization, quoting and sending through
+`payment finish` remain planned.
 
 Save a payment request as JSON:
 
@@ -802,6 +804,53 @@ remove the unused reservation. Before submitting authorization, the CLI saves
 an `in-flight` marker; an ambiguous response leaves the session `uncertain`.
 Interrupted attempts can also leave a lock. Reconcile these recorded attempts
 before removing a lock or starting again. There are no automatic retries.
+
+## Preparing the incoming payment
+
+After receiver authorization is approved, create its incoming payment using the
+private session produced by `payment start`:
+
+```sh
+./open-payments payment prepare '/absolute/private/directory/payment-session.json'
+./open-payments payment prepare '/absolute/private/directory/payment-session.json' --json
+```
+
+For pending authorization, first visit the consent URL and run `grant continue`
+with the returned callback as described below. Preparation requires an issued
+receiver access token. Continuation credentials cannot replace it. If you rotate
+the token with `token rotate`, preparation uses the latest token in the session.
+The server enforces its permissions, expiry and signing-key binding.
+
+Wallet and key IDs default to the session's recorded sender identity, and explicit
+overrides must match. Supply the original private key through the usual signing
+configuration. `ACCESS_TOKEN` is unused. The command rejects `--access-token-file`,
+`--output`, callback and pagination options. Local HTTP requires `--allow-http`.
+
+Preparation validates the saved payment context and calls the SDK once to create
+an incoming payment at the saved receiver resource server, using the canonical
+wallet ID, receive amount and optional metadata recorded by `payment start`.
+It makes no discovery or readback requests. Success saves the full SDK result,
+including private ILP details, under `payment.incoming_payment` in the same `0600`
+session and advances its stage to `incoming-ready`. Grant response, callback
+verification, receipt time and rotated-token context are preserved.
+
+Text output reports readiness, session path and incoming-payment URL. `--json`
+returns `status: "ready"`, `stage: "incoming-ready"`, `saved: true`, `session` and
+`incoming_payment_url`. Response extensions, metadata, tokens and ILP shared
+secrets stay in the private file. Repeating preparation returns the saved URL
+with `saved: false`, leaves the file unchanged and makes no request. This is a
+saved result; use `incoming get` separately to fetch its current state.
+
+Preparation uses the session's shared lock and records an `in-flight` attempt
+before sending the creation request. Known preflight failures restore the ready
+session. HTTP, transport or invalid-response failures leave it `uncertain`, and
+an interrupted process or save failure can leave an in-flight attempt. Reconcile
+these outcomes before any further operation: the server may already have created
+the incoming payment. There are no automatic retries. Argument/configuration
+failures return status 2; operation/file failures return status 1.
+
+This step creates the receiver's incoming resource. Sender authorization, quotes
+and outgoing payments remain later steps in the complete-flow implementation.
 
 ## Grant continuation and callbacks
 

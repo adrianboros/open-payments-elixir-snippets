@@ -28,6 +28,7 @@ defmodule OpenPaymentsSnippets.CLI do
     Grants,
     IncomingPayments,
     OutgoingPayments,
+    PaymentPreparation,
     PaymentStart,
     Keys,
     Quotes,
@@ -55,6 +56,7 @@ defmodule OpenPaymentsSnippets.CLI do
     outgoing list [address] Discover a wallet and fetch one signed page of outgoing payments
     outgoing grant-spent-amounts [address] Read the resource token's current grant spent amounts
     payment start <file|-> Discover wallets and save initial receiver authorization
+    payment prepare <session> Create and save an incoming payment using receiver authorization
     keys validate       Validate an existing Ed25519 signing key offline
     keys public         Export the configured key's public JWK offline
     grant validate <file|-> Validate grant-request JSON offline
@@ -226,6 +228,8 @@ defmodule OpenPaymentsSnippets.CLI do
   defp command(["token", "revoke", session]), do: {:ok, {:token, :revoke, session}}
   defp command(["payment", "start"]), do: {:ok, {:payment, :start, nil}}
   defp command(["payment", "start", source]), do: {:ok, {:payment, :start, source}}
+  defp command(["payment", "prepare"]), do: {:ok, {:payment, :prepare, nil}}
+  defp command(["payment", "prepare", session]), do: {:ok, {:payment, :prepare, session}}
   defp command(["pointer", "resolve"]), do: {:ok, {:pointer, :resolve, nil}}
   defp command(["pointer", "resolve", pointer]), do: {:ok, {:pointer, :resolve, pointer}}
   defp command(_arguments), do: {:error, "Unknown command or unexpected arguments."}
@@ -238,7 +242,7 @@ defmodule OpenPaymentsSnippets.CLI do
     do: true
 
   defp resource_command?({:token, operation, _}) when operation in [:rotate, :revoke], do: true
-  defp resource_command?({:payment, :start, _}), do: true
+  defp resource_command?({:payment, operation, _}) when operation in [:start, :prepare], do: true
   defp resource_command?(_command), do: false
 
   defp signing_command?({:keys, _}), do: true
@@ -251,7 +255,9 @@ defmodule OpenPaymentsSnippets.CLI do
   defp authenticated_command?({:token, operation, _}) when operation in [:rotate, :revoke],
     do: true
 
-  defp authenticated_command?({:payment, :start, _}), do: true
+  defp authenticated_command?({:payment, operation, _}) when operation in [:start, :prepare],
+    do: true
+
   defp authenticated_command?(command), do: resource_token_command?(command)
 
   defp resource_token_command?({:incoming, operation, _})
@@ -391,36 +397,11 @@ defmodule OpenPaymentsSnippets.CLI do
   end
 
   defp execute({:payment, :start, source}, options) do
-    case PaymentStart.run(source, options) do
-      {:ok, result} ->
-        output =
-          if options[:json] do
-            Jason.encode!(result)
-          else
-            lines = [
-              "Payment authorization #{result.status}",
-              "Stage  #{result.stage}",
-              "Session  #{Jason.encode!(result.session)}"
-            ]
+    print_payment_result(PaymentStart.run(source, options), options)
+  end
 
-            lines =
-              if result[:consent_url],
-                do: lines ++ ["Consent URL  #{Jason.encode!(result.consent_url)}"],
-                else: lines
-
-            Enum.join(lines, "\n")
-          end
-
-        IO.puts(output)
-        0
-
-      {:error, {:argument, message}} ->
-        argument_error(message)
-
-      {:error, {:operation, message}} ->
-        IO.puts(:stderr, "Error: #{message}")
-        1
-    end
+  defp execute({:payment, :prepare, session}, options) do
+    print_payment_result(PaymentPreparation.run(session, options), options)
   end
 
   defp execute({:pointer, :resolve, pointer}, _options) when pointer in [nil, ""] do
@@ -436,6 +417,47 @@ defmodule OpenPaymentsSnippets.CLI do
 
       {:error, %Error{}} ->
         argument_error("Invalid payment pointer. Quote '$host[/path]' with single quotes.")
+    end
+  end
+
+  defp print_payment_result(result, options) do
+    case result do
+      {:ok, result} ->
+        output =
+          if options[:json] do
+            Jason.encode!(result)
+          else
+            lines = [
+              if(result.stage == "receiver-grant",
+                do: "Payment authorization #{result.status}",
+                else: "Incoming payment ready"
+              ),
+              "Stage  #{result.stage}",
+              "Session  #{Jason.encode!(result.session)}"
+            ]
+
+            lines =
+              if result[:consent_url],
+                do: lines ++ ["Consent URL  #{Jason.encode!(result.consent_url)}"],
+                else: lines
+
+            lines =
+              if result[:incoming_payment_url],
+                do: lines ++ ["Incoming payment  #{Jason.encode!(result.incoming_payment_url)}"],
+                else: lines
+
+            Enum.join(lines, "\n")
+          end
+
+        IO.puts(output)
+        0
+
+      {:error, {:argument, message}} ->
+        argument_error(message)
+
+      {:error, {:operation, message}} ->
+        IO.puts(:stderr, "Error: #{message}")
+        1
     end
   end
 
