@@ -1312,3 +1312,24 @@ The Linux checks used cached images with networking disabled and source mounts
 read-only. Fresh Elixir 1.20 builds emit two existing `message_signatures`
 dependency deprecation warnings; CLI compilation and checks pass. Hosted CI and
 live authenticated-provider verification remain pending.
+
+## Continuous integration
+
+[The CI workflow](.github/workflows/ci.yml) runs on pushes, pull requests and manual
+dispatch. Its Ubuntu 24.04 matrix covers Elixir/OTP 1.17/26, 1.19/28 and 1.20/29.
+Each job runs the isolated consumer check, including production executable build,
+334 runner tests, seven executable smoke tests and three complete executable flows.
+
+CI checks out the public SDK at
+[`8d31b6f9ee7efab5b38601212b3ebc62841fed7c`](https://github.com/interledger/open-payments-elixir/commit/8d31b6f9ee7efab5b38601212b3ebc62841fed7c).
+The workflow's `SDK_REVISION` selects that exact commit. Update it deliberately
+when adopting a newer remotely available SDK revision, and verify the same local
+consumer check with `--sdk-ref` before changing the pin. Ordinary development
+continues to use the sibling SDK checkout.
+
+Checkout/setup actions are pinned to commit hashes. The workflow uses read-only
+repository permissions, avoids persisting checkout credentials and supplies no
+wallet credentials. Tests use public fixtures and loopback servers.
+
+The workflow passes actionlint, and its pinned SDK revision passes the local
+offline container matrix. Hosted execution remains unverified until a run occurs.

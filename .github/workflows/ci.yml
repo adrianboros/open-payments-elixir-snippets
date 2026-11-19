@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SDK_REVISION: 8d31b6f9ee7efab5b38601212b3ebc62841fed7c
+
+jobs:
+  consumer:
+    name: Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: '1.17'
+            otp: '26'
+          - elixir: '1.19'
+            otp: '28'
+          - elixir: '1.20'
+            otp: '29'
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - name: Check out CLI
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: cli
+          persist-credentials: false
+      - name: Check out pinned SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: interledger/open-payments-elixir
+          ref: ${{ env.SDK_REVISION }}
+          path: sdk
+          persist-credentials: false
+      - name: Set up Erlang and Elixir
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+      - name: Verify isolated production executable and CLI flows
+        run: elixir scripts/check_consumer.exs --sdk-path ../sdk --sdk-ref "$SDK_REVISION"
