@@ -1,5 +1,6 @@
 defmodule OpenPaymentsSnippets.PaymentMacrosTest do
   use ExUnit.Case, async: false
+  import OpenPaymentsSnippets.Test.PaymentMetadata
   import ExUnit.CaptureIO
   import Bitwise
   alias OpenPaymentsSnippets.CLI
@@ -709,10 +710,17 @@ defmodule OpenPaymentsSnippets.PaymentMacrosTest do
             wire.target == "/resources/sender/outgoing-payments" ->
               assert wire.headers["authorization"] == "GNAP " <> token(base, "sender")["value"]
 
-              assert Jason.decode!(wire.body) == %{
-                       "walletAddress" => base <> "/wallets/sender",
-                       "quoteId" => quote_data(base)["id"]
-                     }
+              assert_enriched(
+                Jason.decode!(wire.body),
+                Map.put(
+                  %{
+                    "walletAddress" => base <> "/wallets/sender",
+                    "quoteId" => quote_data(base)["id"]
+                  },
+                  "metadata",
+                  load(path)["payment"]["incoming_request"]["metadata"]
+                )
+              )
 
               if options[:on_outgoing], do: options[:on_outgoing].()
               if options[:fail] == "outgoing", do: :close, else: json(201, outgoing(base))

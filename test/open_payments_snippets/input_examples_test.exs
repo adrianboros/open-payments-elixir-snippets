@@ -242,6 +242,7 @@ defmodule OpenPaymentsSnippets.InputExamplesTest do
           "quote.json" -> OpenPayments.Types.CreateQuote
           "outgoing-payment.json" -> OpenPayments.Types.CreateOutgoingPayment
           "grant.json" -> OpenPayments.Types.GrantRequest
+          "web-monetization-grant.json" -> OpenPayments.Types.GrantRequest
           _ -> nil
         end
 

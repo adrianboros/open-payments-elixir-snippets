@@ -28,12 +28,11 @@ defmodule ConsumerCheck do
     File.chmod!(directory, 0o700)
 
     try do
-      archive = archive!(directory, options)
-      unpack!(archive, Path.join(directory, "open-payments-elixir"))
+      sdk = sdk!(directory, options)
       cli = Path.join(directory, "open-payments-elixir-snippets")
       copy_cli!(cli)
-      production = environment("prod", options[:offline])
-      testing = environment("test", options[:offline])
+      production = environment("prod", options[:offline], sdk)
+      testing = environment("test", options[:offline], sdk)
 
       run!(["deps.get", "--check-locked"], cli, production)
       run!(["compile", "--warnings-as-errors"], cli, production)
@@ -49,7 +48,8 @@ defmodule ConsumerCheck do
           "consumer_flow",
           "test/open_payments_snippets/payment_flow_test.exs",
           "test/open_payments_snippets/payment_finish_test.exs",
-          "test/open_payments_snippets/payment_macros_test.exs"
+          "test/open_payments_snippets/payment_macros_test.exs",
+          "test/open_payments_snippets/web_monetization_test.exs"
         ],
         cli,
         List.keystore(
@@ -65,6 +65,31 @@ defmodule ConsumerCheck do
       )
     after
       File.rm_rf!(directory)
+    end
+  end
+
+  defp sdk!(directory, options) do
+    destination = Path.join(directory, "open-payments-elixir")
+
+    cond do
+      options[:sdk_archive] || options[:sdk_ref] ->
+        unpack!(archive!(directory, options), destination)
+        destination
+
+      options[:sdk_path] ->
+        source = Path.expand(options[:sdk_path])
+        File.mkdir!(destination)
+
+        for name <- @sdk_files do
+          File.cp_r!(Path.join(source, name), Path.join(destination, name))
+        end
+
+        IO.puts("SDK current source working tree (including uncommitted source changes)")
+        destination
+
+      true ->
+        IO.puts("SDK locked Hex package")
+        nil
     end
   end
 
@@ -137,7 +162,7 @@ defmodule ConsumerCheck do
   defp copy_cli!(destination) do
     File.mkdir!(destination)
 
-    for name <- ~w(mix.exs mix.lock .formatter.exs README.md lib test examples) do
+    for name <- ~w(mix.exs mix.lock mix.source.lock .formatter.exs README.md lib test examples) do
       File.cp_r!(Path.join(@root, name), Path.join(destination, name))
     end
 
@@ -148,14 +173,17 @@ defmodule ConsumerCheck do
     end
   end
 
-  defp environment(mode, offline?) do
+  defp environment(mode, offline?, sdk) do
     [
       {"MIX_ENV", mode},
       {"MIX_BUILD_PATH", nil},
       {"MIX_BUILD_ROOT", nil},
       {"MIX_DEPS_PATH", nil},
       {"MIX_LOCKFILE", nil},
+      {"OPEN_PAYMENTS_SDK_PATH", sdk},
       {"OPEN_PAYMENTS_TEST_EXECUTABLE", nil},
+      {"TEST_SCENARIO", nil},
+      {"TEST_RUN_ID", nil},
       {"HEX_OFFLINE", if(offline?, do: "1", else: System.get_env("HEX_OFFLINE"))}
     ] ++
       Enum.map(

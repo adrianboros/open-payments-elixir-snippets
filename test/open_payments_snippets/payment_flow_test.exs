@@ -3,6 +3,7 @@ defmodule OpenPaymentsSnippets.PaymentFlowTest do
 
   @moduletag :consumer_flow
 
+  import OpenPaymentsSnippets.Test.PaymentMetadata
   import ExUnit.CaptureIO
   import Bitwise
   alias OpenPaymentsSnippets.CLI
@@ -171,7 +172,8 @@ defmodule OpenPaymentsSnippets.PaymentFlowTest do
       assert created["grantSpentDebitAmount"] == @debit
       fetched = run(["outgoing", "get", created["id"], "--access-token-file", sender_token])
       assert fetched == Map.drop(created, ~w(grantSpentDebitAmount grantSpentReceiveAmount))
-      assert fetched["sentAmount"] == @debit and fetched["metadata"] == request["metadata"]
+      assert fetched["sentAmount"] == @debit
+      assert_enriched(%{"metadata" => fetched["metadata"]}, Map.take(request, ["metadata"]))
 
       assert [^fetched] =
                run([
@@ -334,10 +336,10 @@ defmodule OpenPaymentsSnippets.PaymentFlowTest do
       {:POST, "/tenant/receiver/incoming-payments"} ->
         authorize(wire, "flow-receiver-resource-1")
 
-        assert payload == %{
-                 "walletAddress" => base <> "/wallets/receiver",
-                 "incomingAmount" => @receive
-               }
+        assert_enriched(payload, %{
+          "walletAddress" => base <> "/wallets/receiver",
+          "incomingAmount" => @receive
+        })
 
         incoming = %{
           "id" => base <> path <> "/in-1",

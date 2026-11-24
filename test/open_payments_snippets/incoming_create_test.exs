@@ -1,6 +1,7 @@
 defmodule OpenPaymentsSnippets.IncomingCreateTest do
   use ExUnit.Case, async: false
 
+  import OpenPaymentsSnippets.Test.PaymentMetadata
   import ExUnit.CaptureIO
 
   alias OpenPaymentsSnippets.CLI
@@ -97,7 +98,7 @@ defmodule OpenPaymentsSnippets.IncomingCreateTest do
       assert_received {:http_request,
                        %{method: :POST, target: "/tenant%2falpha/incoming-payments"} = post}
 
-      assert Jason.decode!(post.body) == payload
+      assert_enriched(Jason.decode!(post.body), payload)
       assert post.headers["authorization"] == "GNAP test-create-token"
       assert post.headers["content-type"] == "application/json"
       assert post.headers["content-length"] == Integer.to_string(byte_size(post.body))
@@ -127,7 +128,7 @@ defmodule OpenPaymentsSnippets.IncomingCreateTest do
     assert result["completed"] == false
     assert_received {:http_request, %{method: :GET}}
     assert_received {:http_request, %{target: "/tenant%2falpha/incoming-payments", body: body}}
-    assert Jason.decode!(body) == payload(base)
+    assert_enriched(Jason.decode!(body), payload(base))
   end
 
   test "credential flags override defaults without changing the receiving payload", %{
@@ -162,7 +163,7 @@ defmodule OpenPaymentsSnippets.IncomingCreateTest do
     assert_received {:http_request, %{method: :POST, headers: headers, body: body}}
     assert headers["authorization"] == "GNAP file-create-token"
     assert headers["signature-input"] =~ ~s(keyid="override-id")
-    assert Jason.decode!(body) == payload(base)
+    assert_enriched(Jason.decode!(body), payload(base))
     assert File.read!(token) == "file-create-token\r\n"
     assert File.read!(key) == @pem
   end

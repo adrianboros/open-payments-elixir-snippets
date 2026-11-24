@@ -1,0 +1,231 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-24",
+  "sdkVersion": "1.0.0",
+  "sdkSourceCommit": "bf97d71b8b5e14f433c7ff1260eeeeab94901424",
+  "automated": [
+    {
+      "platform": "Linux",
+      "elixir": "1.17.3",
+      "otp": "26",
+      "sdkSources": [
+        "hex",
+        "local"
+      ],
+      "runnerTests": 373,
+      "executableSmokeTests": 8,
+      "executableFlows": 11,
+      "status": "passed"
+    },
+    {
+      "platform": "Linux",
+      "elixir": "1.19.7",
+      "otp": "28",
+      "sdkSources": [
+        "hex",
+        "local"
+      ],
+      "runnerTests": 373,
+      "executableSmokeTests": 8,
+      "executableFlows": 11,
+      "status": "passed"
+    },
+    {
+      "platform": "Linux",
+      "elixir": "1.20.5",
+      "otp": "29",
+      "sdkSources": [
+        "hex",
+        "local"
+      ],
+      "runnerTests": 373,
+      "executableSmokeTests": 8,
+      "executableFlows": 11,
+      "status": "passed"
+    },
+    {
+      "platform": "macOS",
+      "elixir": "1.20.4",
+      "otp": "29",
+      "sdkSources": [
+        "hex",
+        "local"
+      ],
+      "runnerTests": 373,
+      "executableSmokeTests": 8,
+      "executableFlows": 11,
+      "status": "passed"
+    }
+  ],
+  "live": {
+    "normalScenarios": [
+      {
+        "scenario": "eur-to-eur",
+        "status": "passed",
+        "sdk": {
+          "sdk": "open_payments_elixir",
+          "sdkVersion": "1.0.0",
+          "sdkSource": "hex",
+          "cliVersion": "0.1.0"
+        },
+        "metadataVerified": true,
+        "incomingCompleted": true,
+        "tokensRevoked": true,
+        "grantsCancelled": true,
+        "debit": {
+          "value": "1731",
+          "assetCode": "EUR",
+          "assetScale": 2
+        },
+        "received": {
+          "value": "1631",
+          "assetCode": "EUR",
+          "assetScale": 2
+        }
+      },
+      {
+        "scenario": "gbp-to-gbp",
+        "status": "passed",
+        "sdk": {
+          "sdk": "open_payments_elixir",
+          "sdkVersion": "1.0.0",
+          "sdkSource": "hex",
+          "cliVersion": "0.1.0"
+        },
+        "metadataVerified": true,
+        "incomingCompleted": true,
+        "tokensRevoked": true,
+        "grantsCancelled": true,
+        "debit": {
+          "value": "7634",
+          "assetCode": "GBP",
+          "assetScale": 2
+        },
+        "received": {
+          "value": "7634",
+          "assetCode": "GBP",
+          "assetScale": 2
+        }
+      },
+      {
+        "scenario": "eur-to-gbp",
+        "status": "passed",
+        "sdk": {
+          "sdk": "open_payments_elixir",
+          "sdkVersion": "1.0.0",
+          "sdkSource": "hex",
+          "cliVersion": "0.1.0"
+        },
+        "metadataVerified": true,
+        "incomingCompleted": true,
+        "tokensRevoked": true,
+        "grantsCancelled": true,
+        "debit": {
+          "value": "9089",
+          "assetCode": "EUR",
+          "assetScale": 2
+        },
+        "received": {
+          "value": "7569",
+          "assetCode": "GBP",
+          "assetScale": 2
+        }
+      },
+      {
+        "scenario": "gbp-to-eur",
+        "status": "passed",
+        "sdk": {
+          "sdk": "open_payments_elixir",
+          "sdkVersion": "1.0.0",
+          "sdkSource": "hex",
+          "cliVersion": "0.1.0"
+        },
+        "metadataVerified": true,
+        "incomingCompleted": true,
+        "tokensRevoked": true,
+        "grantsCancelled": true,
+        "debit": {
+          "value": "5116",
+          "assetCode": "GBP",
+          "assetScale": 2
+        },
+        "received": {
+          "value": "6142",
+          "assetCode": "EUR",
+          "assetScale": 2
+        }
+      }
+    ],
+    "hourlyStream": {
+      "scenario": "hourly-stream",
+      "status": "passed",
+      "sdk": {
+        "sdk": "open_payments_elixir",
+        "sdkVersion": "1.0.0",
+        "sdkSource": "hex",
+        "cliVersion": "0.1.0"
+      },
+      "metadataVerified": true,
+      "incomingCompleted": true,
+      "tokensRevoked": true,
+      "grantsCancelled": true,
+      "budget": {
+        "value": "1000",
+        "assetCode": "GBP",
+        "assetScale": 2
+      },
+      "contribution": {
+        "value": "1",
+        "assetCode": "GBP",
+        "assetScale": 2
+      },
+      "spent": {
+        "value": "8",
+        "assetCode": "GBP",
+        "assetScale": 2
+      },
+      "remaining": {
+        "value": "992",
+        "assetCode": "GBP",
+        "assetScale": 2
+      },
+      "count": 8,
+      "sameToken": true,
+      "intervalDuration": "PT1H",
+      "elapsedSeconds": 46.683991,
+      "minimumSpacingSeconds": 6.575488
+    },
+    "earlierDirectPaymentCheck": {
+      "count": 3,
+      "contribution": {
+        "value": "1",
+        "assetCode": "GBP",
+        "assetScale": 2
+      },
+      "spent": {
+        "value": "3",
+        "assetCode": "GBP",
+        "assetScale": 2
+      },
+      "tokenRotationVerified": true,
+      "incomingCompleted": true,
+      "tokensRevoked": true,
+      "grantsCancelled": true
+    },
+    "settledOutgoingPayments": 15,
+    "totalDebits": [
+      {
+        "value": "10820",
+        "assetCode": "EUR",
+        "assetScale": 2
+      },
+      {
+        "value": "12761",
+        "assetCode": "GBP",
+        "assetScale": 2
+      }
+    ],
+    "callbackReceiversStopped": true
+  },
+  "hostedCI": "not dispatched"
+}

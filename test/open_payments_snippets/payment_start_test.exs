@@ -1,6 +1,7 @@
 defmodule OpenPaymentsSnippets.PaymentStartTest do
   use ExUnit.Case, async: false
 
+  import OpenPaymentsSnippets.Test.PaymentMetadata
   import ExUnit.CaptureIO
   import Bitwise
   alias OpenPaymentsSnippets.Commands.PaymentStart
@@ -99,11 +100,11 @@ defmodule OpenPaymentsSnippets.PaymentStartTest do
     assert saved["grant_endpoint"] == base <> "/issuer/receiver?part=a%2Bb"
     assert saved["payment"]["version"] == 1 and saved["payment"]["stage"] == "receiver-grant"
 
-    assert saved["payment"]["incoming_request"] == %{
-             "walletAddress" => base <> "/receiver-canonical",
-             "incomingAmount" => amount(),
-             "metadata" => data["metadata"]
-           }
+    assert_enriched(saved["payment"]["incoming_request"], %{
+      "walletAddress" => base <> "/receiver-canonical",
+      "incomingAmount" => amount(),
+      "metadata" => data["metadata"]
+    })
 
     assert saved["payment"]["sender_wallet"]["id"] == base <> "/sender-canonical"
     assert saved["payment"]["receiver_wallet"]["resourceServer"] == base <> "/payments/receiver"

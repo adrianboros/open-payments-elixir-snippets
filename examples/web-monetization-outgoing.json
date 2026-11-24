@@ -1,0 +1,24 @@
+{
+  "walletAddress": {
+    "$var": "SENDER_WALLET_URL"
+  },
+  "incomingPayment": {
+    "$var": "INCOMING_PAYMENT_URL"
+  },
+  "debitAmount": {
+    "value": {
+      "$var": "DEBIT_VALUE"
+    },
+    "assetCode": {
+      "$var": "SENDER_ASSET_CODE"
+    },
+    "assetScale": {
+      "$var": "SENDER_ASSET_SCALE",
+      "type": "integer"
+    }
+  },
+  "metadata": {
+    "description": "Open Payments via Elixir SDK - Web Monetization direct contribution",
+    "testScenario": "web-monetization"
+  }
+}

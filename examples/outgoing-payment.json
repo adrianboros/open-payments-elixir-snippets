@@ -6,6 +6,7 @@
     "$var": "QUOTE_URL"
   },
   "metadata": {
-    "description": "Open Payments via Elixir SDK - outgoing payment"
+    "description": "Open Payments via Elixir SDK - outgoing payment",
+    "testScenario": "outgoing-payment"
   }
 }

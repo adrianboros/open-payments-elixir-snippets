@@ -9,3 +9,6 @@
 /open-payments
 /*.ez
 /*.tar
+/.live-tests/
+/IMPLEMENTATION_PLAN.md
+__pycache__/

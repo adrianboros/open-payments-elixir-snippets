@@ -21,7 +21,8 @@
     "$var": "RECEIVER_FINISH_URI"
   },
   "metadata": {
-    "description": "Open Payments via Elixir SDK - cross-wallet payment"
+    "description": "Open Payments via Elixir SDK - cross-wallet payment",
+    "testScenario": "payment-cross-wallet"
   },
   "senderAuthorization": {
     "debitAmount": {

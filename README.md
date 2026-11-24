@@ -5,13 +5,7 @@ A developer CLI that exercises the public
 
 ## Local setup
 
-Keep the SDK checkout next to this project.
-
-```text
-interledger/
-├── open-payments-elixir/
-└── open-payments-elixir-snippets/
-```
+The default dependency is the published [`open_payments_elixir` 1.0 SDK](https://hex.pm/packages/open_payments_elixir), locked in `mix.lock`. No sibling checkout is required.
 
 The project declares Elixir 1.17+ to match the SDK. Isolated consumer verification
 covers Linux Elixir/OTP pairs 1.17/26, 1.19/28 and 1.20/29. The macOS development
@@ -26,10 +20,26 @@ mix escript.build
 ./open-payments version --json
 ```
 
-The local path dependency consumes the sibling SDK's working tree, including
-uncommitted changes. This project is under development with that checkout.
-Build artifacts and fetched dependencies live in this project's `_build` and
-`deps` directories.
+To develop against the current sibling source, or explicitly fall back to it when Hex is unavailable:
+
+```sh
+export OPEN_PAYMENTS_SDK_PATH=../open-payments-elixir
+mix deps.get
+mix check
+mix escript.build
+# Return to the published Hex SDK:
+unset OPEN_PAYMENTS_SDK_PATH
+mix deps.get
+mix escript.build
+```
+
+Relative SDK paths resolve from this project, and must contain `mix.exs`.
+Source mode consumes the working tree, including uncommitted changes, and uses
+`mix.source.lock` to keep the Hex lock unchanged. Set the variable for every Mix
+command, or export it as above. An escript embeds the selected SDK at build time;
+changing the variable when running an already-built executable does not switch it.
+There is no silent fallback on network failures. Both modes use this project's
+`_build` and `deps` directories.
 
 The generated `open-payments` escript embeds Elixir and its runtime dependencies.
 Running it requires compatible Erlang/OTP. You can invoke it by absolute path
@@ -138,8 +148,16 @@ Results go to stdout. Diagnostics go to stderr. Exit statuses are 0 for success,
 
 The tracked [examples](examples/) contain JSON templates for the payment macros,
 individual staged inputs, incoming payments, quotes, outgoing payments and grants.
-Payment templates label `metadata.description` with `Open Payments via Elixir SDK`
-and the scenario name. Use a fresh initialization to apply updated example metadata.
+Every incoming/outgoing creation adds `metadata.openPaymentsSnippets` containing
+`sdk`, `sdkVersion`, `sdkSource` (`hex` or `local`), `cliVersion`, `scenario` and
+`runId`. Caller metadata is preserved except for that reserved namespace. A missing
+`description` gets a readable Elixir SDK label. Templates set `metadata.testScenario`;
+`TEST_SCENARIO` overrides it. Set `TEST_RUN_ID` to group standalone operations in
+one run; otherwise each new request gets a random ID. Load these through `--env-file`
+or exported environment variables. Staged flows save the label/ID and carry their
+incoming request metadata into outgoing creation, even when a provider omits it
+from responses. Cached payments are returned without rewriting their metadata.
+Use a fresh initialization to label a new scenario.
 Prepare a separate local scenario file alongside your existing wallet credentials:
 
 ```sh
@@ -1542,37 +1560,104 @@ callbacks, server waits, confirmation, saved-step reuse and interrupted operatio
 mix test test/open_payments_snippets/payment_macros_test.exs
 ```
 
-## Isolated consumer check
+## Saved acceptance scenarios
 
-Build a production executable and run the CLI against a clean, committed SDK
-snapshot in a temporary workspace:
+[Testing instructions](docs/TESTING.md) document the automated suite, reusable
+opt-in live runner, and all numeric scenario inputs. [Saved results](test-results/2026-11-24.json)
+retain amounts and verification outcomes without wallet addresses, identifiers,
+credentials or callbacks. Configure wallet roles in ignored local settings using
+[the placeholder template](examples/live-tests.env.example). Runtime state stays
+under the ignored `.live-tests/` directory; the runner exports a sanitized report.
+
+## Web Monetization scenarios
+
+Web Monetization separates the **grant budget** from the **contribution size**.
+The [sender grant template](examples/web-monetization-grant.json) requests a 10.00
+debit budget (`BUDGET_VALUE=1000` for scale 2), with
+`GRANT_INTERVAL=R/<UTC-start>/PT1H` for an hourly budget. This interval renews the
+budget each hour; it is separate from the access token's expiry and the payment
+cadence. The extension uses the same approach in its
+[outgoing grant service](https://github.com/interledger/web-monetization-extension/blob/main/src/background/services/outgoingPaymentGrant.ts)
+and schedules contributions in its
+[payment manager](https://github.com/interledger/web-monetization-extension/blob/main/src/background/services/paymentManager.ts).
+
+The [open incoming template](examples/web-monetization-incoming.json) omits
+`incomingAmount`. Reuse the issued sender token for every
+[direct outgoing contribution](examples/web-monetization-outgoing.json), supplying
+`incomingPayment` and `debitAmount`. For a scale-2 wallet, `DEBIT_VALUE=1` sends
+0.01 against the 10.00 budget. Eight such payments spend 0.08 and leave 9.92.
+At a 10.00/hour rate, one 0.01 contribution is scheduled every 3.6 seconds;
+a bounded test sends eight contributions and cancels the grant afterward.
+The CLI exercises the Open Payments APIs; browser monetization events belong to
+the extension.
+
+Use a fresh UTC start, random `GRANT_NONCE`, controlled `SENDER_FINISH_URI` and
+shared `TEST_RUN_ID` in your local scenario settings. Request the budget once,
+complete its consent, and retain the issued token privately:
 
 ```sh
-elixir scripts/check_consumer.exs
-# Use cached Hex dependencies without registry/network access:
-elixir scripts/check_consumer.exs --offline
+./open-payments grant request examples/web-monetization-grant.json \
+  --env-file .env --env-file .env.scenarios \
+  --output /private/path/wm-sender-grant.json --json
+./open-payments grant continue /private/path/wm-sender-grant.json \
+  --env-file .env --callback-file /private/path/wm-callback.txt --json
 ```
 
-The default exports the sibling SDK's committed `HEAD` and prints its full commit
-ID. Select another local checkout or an available commit explicitly with
-`--sdk-path <directory>` and `--sdk-ref <revision>`. The check copies CLI source,
-tests and the lockfile, builds dependencies from scratch, compiles a production
-escript, runs `mix check`, then performs eight executable smoke tests and six
-complete executable flows. Each subprocess runs outside the checkout with real
-stdin and separate stdout/stderr capture. Environment wallet credentials are
-cleared before testing; flow tests supply public keys and local simulated servers.
-The temporary SDK, CLI copy and build output are removed afterward.
+With separate receiver and sender tokens obtained through the grant commands:
 
-The smoke tests cover help/version, payment pointers, key loading/export, literal
-environment-file templates, UTF-8 stdin, offline callback verification, error exits
-and production archive contents. The executable flows cover
-both low-level payment variants, the staged flow through confirmed outgoing
-creation, and the macros with immediate grants, separate consent callbacks and
-a real self-payment shell pipeline. They also exercise token rotation/revocation
-and grant cancellation. Normal `mix test`
-continues to run those scenarios through the testable CLI runner.
+```sh
+./open-payments incoming create examples/web-monetization-incoming.json \
+  --env-file .env --env-file .env.scenarios \
+  --access-token-file /private/path/receiver-token.txt --json
+# Set INCOMING_PAYMENT_URL to the returned incoming payment ID.
+# Reuse the same sender token for each contribution, spaced over time.
+# Eight calls with DEBIT_VALUE=1 spend 0.08, not the full 10.00 grant budget.
+./open-payments outgoing create examples/web-monetization-outgoing.json \
+  --env-file .env --env-file .env.scenarios --var DEBIT_VALUE=1 \
+  --access-token-file /private/path/sender-token.txt --json
+./open-payments incoming get-public "$INCOMING_PAYMENT_URL" --json
+./open-payments incoming complete "$INCOMING_PAYMENT_URL" \
+  --env-file .env --access-token-file /private/path/receiver-token.txt --json
+```
 
-For an environment without Git, provide a source archive exported beforehand:
+Use a shared `TEST_RUN_ID` and `TEST_SCENARIO=web-monetization` in your local
+scenario settings. Check outgoing status and incoming received amounts before
+completion. Creation alone does not prove delivery. A scale-2 wallet's smallest
+positive debit is 0.01; sub-0.01 tests need an asset with greater precision.
+The automated suite includes synthetic scale-9 sub-cent contributions.
+
+```sh
+mix test test/open_payments_snippets/web_monetization_test.exs
+```
+
+These simulated flows cover same-asset, both GBP/EUR directions, differing scales,
+sub-cent contributions, one hourly grant with a 10.00 budget, eight contributions
+to one incoming payment, cumulative receipts/spent amounts, completion, rejection after completion,
+and token revocation. Existing tests cover callback consent, quote/direct payments,
+self-payments, pagination, caps, token rotation, errors and ambiguous retries.
+They use public keys and loopback providers, with no funded wallet required.
+
+## Isolated consumer check
+
+Build a production executable and run the complete suite, eight executable
+smokes and eleven executable flows from a temporary workspace:
+
+```sh
+# Published Hex SDK, using the checked-in Hex lock:
+elixir scripts/check_consumer.exs --offline
+# Current sibling source, including uncommitted source changes:
+elixir scripts/check_consumer.exs --sdk-path ../open-payments-elixir --offline
+# Reproducible committed source snapshot:
+elixir scripts/check_consumer.exs --sdk-path ../open-payments-elixir --sdk-ref HEAD --offline
+```
+
+Omit `--offline` to fetch missing dependencies. Source mode uses `mix.source.lock`.
+The driver clears wallet credentials and test labels, copies only public sources,
+builds dependencies and the production escript, runs `mix check`, then invokes the
+executable from outside the checkout with real stdin and separate stderr capture.
+Temporary workspaces are removed afterward. It does not run live provider payments.
+
+For a source archive exported in advance:
 
 ```sh
 git -C ../open-payments-elixir archive --format=tar \
@@ -1581,41 +1666,25 @@ git -C ../open-payments-elixir archive --format=tar \
 elixir scripts/check_consumer.exs --sdk-archive /tmp/open-payments-sdk.tar --offline
 ```
 
-Archive mode prints the archive's SHA256. Use a known committed revision when
-exporting it to reproduce a particular SDK snapshot. Offline mode requires the
-locked dependencies and Hex tooling to be cached already.
+Archive mode prints its SHA256; commit mode prints its revision. Both use an
+allowlist that excludes operational settings, keys and sessions.
 
-Verified with SDK commit `8d31b6f9ee7efab5b38601212b3ebc62841fed7c`:
-
-| Runtime | Isolated result |
-| --- | --- |
-| Linux Elixir 1.17.3 / OTP 26 | 368 runner tests, 8 executable smoke tests and 6 executable flows |
-| Linux Elixir 1.19.7 / OTP 28 | Same checks pass |
-| Linux Elixir 1.20.5 / OTP 29 | Same checks pass |
-| macOS Elixir 1.20.4 / OTP 29 | Same checks pass using an explicit Git export |
-
-The Linux checks used cached images with networking disabled and source mounts
-read-only. Fresh Elixir 1.20 builds emit two existing `message_signatures`
-dependency deprecation warnings; CLI compilation and checks pass. Hosted CI and
-live authenticated-provider verification remain pending.
+Verified on 2026-11-24 against Hex 1.0.0 and sibling source release `bf97d71`:
+373 runner tests, 8 executable smoke tests and 11 executable flows pass on macOS
+Elixir/OTP 1.20.4/29 and Linux 1.17.3/26, 1.19.7/28 and 1.20.5/29. Local-source to
+Hex switching also passes in the same workspace. Fifteen separate live test-wallet
+payments settled, including an eight-payment 0.01 stream against one 10.00 hourly
+grant using the same token. Its cumulative spend was 0.08, with 9.92 left before
+cancellation; incoming completion and SDK/test metadata on both sides were verified.
+The earlier direct-payment check also passed token rotation and cleanup.
+Synthetic scale-9 sub-cent tests remain simulated; hosted CI has not been dispatched.
 
 ## Continuous integration
 
-[The CI workflow](.github/workflows/ci.yml) runs on pushes, pull requests and manual
-dispatch. Its Ubuntu 24.04 matrix covers Elixir/OTP 1.17/26, 1.19/28 and 1.20/29.
-Each job runs the isolated consumer check, including production executable build,
-368 runner tests, eight executable smoke tests and six complete executable flows.
-
-CI checks out the public SDK at
-[`8d31b6f9ee7efab5b38601212b3ebc62841fed7c`](https://github.com/interledger/open-payments-elixir/commit/8d31b6f9ee7efab5b38601212b3ebc62841fed7c).
-The workflow's `SDK_REVISION` selects that exact commit. Update it deliberately
-when adopting a newer remotely available SDK revision, and verify the same local
-consumer check with `--sdk-ref` before changing the pin. Ordinary development
-continues to use the sibling SDK checkout.
-
-Checkout/setup actions are pinned to commit hashes. The workflow uses read-only
-repository permissions, avoids persisting checkout credentials and supplies no
-wallet credentials. Tests use public fixtures and loopback servers.
-
-The workflow passes actionlint, and its pinned SDK revision passes the local
-offline container matrix. Hosted execution remains unverified until a run occurs.
+[CI](.github/workflows/ci.yml) tests the locked published Hex SDK and pinned source
+SDK on Elixir/OTP 1.17/26, 1.19/28 and 1.20/29 (six jobs). Source jobs select release
+commit `bf97d71b8b5e14f433c7ff1260eeeeab94901424` through `SDK_REVISION`.
+Each job runs the isolated production build, full runner suite, eight smoke tests
+and eleven executable flows. Checkout/setup actions are pinned, permissions are
+read-only, and no wallet credentials are supplied. Hosted execution and live
+provider results are separate from local simulated verification.

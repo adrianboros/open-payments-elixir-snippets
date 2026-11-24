@@ -21,6 +21,7 @@
     "$var": "RECEIVER_FINISH_URI"
   },
   "metadata": {
-    "description": "Open Payments via Elixir SDK - staged payment"
+    "description": "Open Payments via Elixir SDK - staged payment",
+    "testScenario": "payment-start"
   }
 }

@@ -1,0 +1,50 @@
+{
+  "client": {
+    "$var": "CLIENT_WALLET_URL"
+  },
+  "access_token": {
+    "access": [
+      {
+        "type": "outgoing-payment",
+        "actions": [
+          "create",
+          "read"
+        ],
+        "identifier": {
+          "$var": "SENDER_WALLET_URL"
+        },
+        "limits": {
+          "debitAmount": {
+            "value": {
+              "$var": "BUDGET_VALUE"
+            },
+            "assetCode": {
+              "$var": "SENDER_ASSET_CODE"
+            },
+            "assetScale": {
+              "$var": "SENDER_ASSET_SCALE",
+              "type": "integer"
+            }
+          },
+          "interval": {
+            "$var": "GRANT_INTERVAL"
+          }
+        }
+      }
+    ]
+  },
+  "interact": {
+    "start": [
+      "redirect"
+    ],
+    "finish": {
+      "method": "redirect",
+      "uri": {
+        "$var": "SENDER_FINISH_URI"
+      },
+      "nonce": {
+        "$var": "GRANT_NONCE"
+      }
+    }
+  }
+}

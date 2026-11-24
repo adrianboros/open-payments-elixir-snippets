@@ -15,6 +15,7 @@
     }
   },
   "metadata": {
-    "description": "Open Payments via Elixir SDK - incoming payment"
+    "description": "Open Payments via Elixir SDK - incoming payment",
+    "testScenario": "incoming-payment"
   }
 }

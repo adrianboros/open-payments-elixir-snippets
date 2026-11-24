@@ -11,7 +11,7 @@ defmodule OpenPaymentsSnippets.Commands.OutgoingPayments do
   }
 
   alias OpenPayments.Types.OutgoingPayment, as: PaymentData
-  alias OpenPaymentsSnippets.{Config, Input, PaginationOptions}
+  alias OpenPaymentsSnippets.{Config, Input, PaginationOptions, PaymentMetadata}
 
   @spec get(String.t(), keyword()) ::
           {:ok, PaymentData.t()} | {:error, Error.t() | String.t()}
@@ -59,6 +59,7 @@ defmodule OpenPaymentsSnippets.Commands.OutgoingPayments do
   def create(source, options) do
     with {:ok, data} <- Input.json(source, "outgoing-payment request", options),
          {:ok, request} <- CreateOutgoingPayment.from_map(data),
+         request = PaymentMetadata.annotate(request, options, "outgoing-create"),
          {:ok, token} <- Config.access_token(options),
          {:ok, client, _key} <- Config.authenticated_client(options),
          {:ok, wallet} <- WalletAddress.get(client, request.wallet_address) do

@@ -1,5 +1,6 @@
 defmodule OpenPaymentsSnippets.PaymentFinishTest do
   use ExUnit.Case, async: false
+  import OpenPaymentsSnippets.Test.PaymentMetadata
   import ExUnit.CaptureIO
   import Bitwise
   alias OpenPaymentsSnippets.CLI
@@ -56,10 +57,10 @@ defmodule OpenPaymentsSnippets.PaymentFinishTest do
         assert saved["payment"]["stage"] == "quote-ready"
         assert saved["payment"]["outgoing_confirmation"] == "yes"
 
-        assert saved["payment"]["outgoing_request"] == %{
-                 "walletAddress" => origin(wire) <> "/sender",
-                 "quoteId" => quote_data(origin(wire))["id"]
-               }
+        assert_enriched(saved["payment"]["outgoing_request"], %{
+          "walletAddress" => origin(wire) <> "/sender",
+          "quoteId" => quote_data(origin(wire))["id"]
+        })
 
         assert (File.stat!(path).mode &&& 0o777) == 0o600
         assert (File.stat!(path <> ".lock").mode &&& 0o777) == 0o600
@@ -570,10 +571,10 @@ defmodule OpenPaymentsSnippets.PaymentFinishTest do
       assert saved["payment"]["quote"] == original["payment"]["quote"]
       assert saved["payment"]["receiver_grant"] == original["payment"]["receiver_grant"]
 
-      assert saved["payment"]["outgoing_request"] == %{
-               "walletAddress" => base <> "/sender",
-               "quoteId" => quote_data(base)["id"]
-             }
+      assert_enriched(saved["payment"]["outgoing_request"], %{
+        "walletAddress" => base <> "/sender",
+        "quoteId" => quote_data(base)["id"]
+      })
 
       assert {"", _, 2} = invoke(args(c.path) ++ ["--yes"])
 

@@ -1,0 +1,10 @@
+{
+  "eur-to-eur": {"sender": "EUR", "receiver": "EUR", "receiveValue": "1631", "maxDebitValue": "10000"},
+  "gbp-to-gbp": {"sender": "GBP", "receiver": "GBP", "receiveValue": "7634", "maxDebitValue": "10000"},
+  "eur-to-gbp": {"sender": "EUR", "receiver": "GBP", "receiveValue": "7569", "maxDebitValue": "10000"},
+  "gbp-to-eur": {"sender": "GBP", "receiver": "EUR", "receiveValue": "6142", "maxDebitValue": "10000"},
+  "hourly-stream": {
+    "sender": "GBP", "receiver": "GBP", "budgetValue": "1000", "contributionValue": "1",
+    "count": 8, "minimumSpacingSeconds": 3.6, "intervalDuration": "PT1H"
+  }
+}

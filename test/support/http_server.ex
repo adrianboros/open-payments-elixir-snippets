@@ -23,8 +23,19 @@ defmodule OpenPaymentsSnippets.Test.HTTPServer do
         length = headers |> Map.get("content-length", "0") |> String.to_integer()
         body = if length == 0, do: "", else: elem(:gen_tcp.recv(connection, length, 5_000), 1)
         wire = %{method: method, target: target, headers: headers, body: body}
-        send(owner, {:http_request, wire})
-        result = if is_function(response, 1), do: response.(wire), else: response
+        # The development host probes listening ports while executable flows run.
+        # Keep that exact health probe outside the SDK request trace. Any root
+        # request from the SDK still reaches the fixture and fails its assertions.
+        probe? = method == :GET and target == "/" and headers["user-agent"] == "portwatch"
+
+        result =
+          if probe? do
+            {404, [], ""}
+          else
+            send(owner, {:http_request, wire})
+            if is_function(response, 1), do: response.(wire), else: response
+          end
+
         respond(connection, result)
         :gen_tcp.close(connection)
         serve(listener, owner, response)

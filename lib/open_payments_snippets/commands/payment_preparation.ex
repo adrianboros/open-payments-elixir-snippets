@@ -2,8 +2,8 @@ defmodule OpenPaymentsSnippets.Commands.PaymentPreparation do
   @moduledoc false
 
   alias OpenPayments.{Error, IncomingPayment}
-  alias OpenPayments.Types.{AccessToken, IncomingPaymentWithMethods}
-  alias OpenPaymentsSnippets.{GrantSession, PaymentSession}
+  alias OpenPayments.Types.{AccessToken, CreateIncomingPayment, IncomingPaymentWithMethods}
+  alias OpenPaymentsSnippets.{GrantSession, PaymentMetadata, PaymentSession}
 
   @spec run(String.t() | nil, keyword()) :: {:ok, map()} | {:error, term()}
   def run(path, options) do
@@ -12,8 +12,13 @@ defmodule OpenPaymentsSnippets.Commands.PaymentPreparation do
            {:ok, payment, request, _sender, receiver} <- PaymentSession.context(session),
            {:ok, client, _key} <- GrantSession.client(session, options) do
         case payment["stage"] do
-          "receiver-grant" -> prepare(path, session, client, response, request, receiver)
-          _ -> cached(path, payment)
+          "receiver-grant" ->
+            request = PaymentMetadata.ensure(request, options, "payment-quote")
+
+            prepare(path, session, client, response, request, receiver)
+
+          _ ->
+            cached(path, payment)
         end
       end
     end)
@@ -43,12 +48,13 @@ defmodule OpenPaymentsSnippets.Commands.PaymentPreparation do
         "attempted_at" => now(),
         "attempt_operation" => "payment-prepare"
       })
+      |> put_in(["payment", "incoming_request"], CreateIncomingPayment.to_map(request))
 
     with :ok <- GrantSession.save(path, marked) do
       case IncomingPayment.create(client, receiver.resource_server, request, access_token: token) do
         {:ok, incoming} ->
           updated =
-            session
+            marked
             |> put_in(["payment", "stage"], "incoming-ready")
             |> put_in(
               ["payment", "incoming_payment"],

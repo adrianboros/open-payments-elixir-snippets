@@ -13,7 +13,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentFinish do
   }
 
   alias OpenPayments.Types.Quote, as: QuoteData
-  alias OpenPaymentsSnippets.{GrantSession, PaymentSession}
+  alias OpenPaymentsSnippets.{GrantSession, PaymentMetadata, PaymentSession}
 
   @spec run(String.t() | nil, keyword()) :: {:ok, map()} | {:error, term()}
   def run(path, options) do
@@ -57,6 +57,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentFinish do
          :ok <- authorized_quote(payment, token, quote, sender.id),
          {:ok, request} <-
            CreateOutgoingPayment.from_map(%{"walletAddress" => sender.id, "quoteId" => quote.id}),
+         request = PaymentMetadata.outgoing(request, payment["incoming_request"], options),
          {:ok, confirmation} <- confirm(sender.id, incoming.id, quote, options) do
       if confirmation == :declined do
         {:ok, %{status: "declined", stage: "quote-ready", saved: false, session: path}}

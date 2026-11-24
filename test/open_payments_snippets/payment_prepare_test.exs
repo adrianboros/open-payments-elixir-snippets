@@ -1,5 +1,6 @@
 defmodule OpenPaymentsSnippets.PaymentPrepareTest do
   use ExUnit.Case, async: false
+  import OpenPaymentsSnippets.Test.PaymentMetadata
   import ExUnit.CaptureIO
   import Bitwise
   alias OpenPaymentsSnippets.CLI
@@ -69,7 +70,8 @@ defmodule OpenPaymentsSnippets.PaymentPrepareTest do
     assert {stdout, "", 0} = invoke(args(c.path) ++ ["--json"])
     assert Jason.decode!(stdout) == summary(c.path, base, true)
     assert_received {:http_request, %{method: :POST} = wire}
-    assert Jason.decode!(wire.body) == session["payment"]["incoming_request"]
+    assert_enriched(Jason.decode!(wire.body), session["payment"]["incoming_request"])
+    session = put_in(session, ["payment", "incoming_request"], Jason.decode!(wire.body))
     assert wire.headers["content-length"] == Integer.to_string(byte_size(wire.body))
     refute valid_signature?(%{wire | body: wire.body <> " "})
     refute valid_signature?(%{wire | target: wire.target <> "changed"})
@@ -359,7 +361,15 @@ defmodule OpenPaymentsSnippets.PaymentPrepareTest do
       saved = load(c.path)
       assert saved["state"] == "uncertain" and saved["attempt_operation"] == "payment-prepare"
       assert saved["response"] == session["response"]
-      assert saved["payment"] == session["payment"]
+
+      assert_enriched(
+        saved["payment"]["incoming_request"],
+        session["payment"]["incoming_request"]
+      )
+
+      assert Map.delete(saved["payment"], "incoming_request") ==
+               Map.delete(session["payment"], "incoming_request")
+
       assert {"", _, 2} = invoke(args(c.path))
 
       for command <- [

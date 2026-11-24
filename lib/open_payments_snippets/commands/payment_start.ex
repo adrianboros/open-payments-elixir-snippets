@@ -12,7 +12,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentStart do
   }
 
   alias OpenPayments.Types.WalletAddress, as: WalletData
-  alias OpenPaymentsSnippets.{Config, GrantSession, Input}
+  alias OpenPaymentsSnippets.{Config, GrantSession, Input, PaymentMetadata}
 
   @spec run(String.t() | nil, keyword()) :: {:ok, map()} | {:error, term()}
   def run(source, options) do
@@ -28,6 +28,7 @@ defmodule OpenPaymentsSnippets.Commands.PaymentStart do
   def from_map(data, options) do
     with {:ok, output} <- output(options[:output]),
          {:ok, incoming, finish, sender_address} <- intent(data),
+         incoming = PaymentMetadata.annotate(incoming, options, "payment-quote"),
          {:ok, client, key} <- Config.authenticated_client(options) do
       GrantSession.create(output, fn path ->
         discover(path, client, key, incoming, finish, sender_address, options[:scenario])

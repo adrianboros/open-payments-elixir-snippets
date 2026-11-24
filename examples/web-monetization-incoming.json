@@ -1,0 +1,9 @@
+{
+  "walletAddress": {
+    "$var": "RECEIVER_WALLET_URL"
+  },
+  "metadata": {
+    "description": "Open Payments via Elixir SDK - Web Monetization open incoming payment",
+    "testScenario": "web-monetization"
+  }
+}

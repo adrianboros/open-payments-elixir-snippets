@@ -1,0 +1,7 @@
+{
+  "client": {"$var": "WALLET_ADDRESS"},
+  "EUR": {"$var": "EUR_WALLET_ADDRESS"},
+  "GBP": {"$var": "GBP_WALLET_ADDRESS"},
+  "receiverFinishUri": {"$var": "RECEIVER_FINISH_URI"},
+  "senderFinishUri": {"$var": "SENDER_FINISH_URI"}
+}

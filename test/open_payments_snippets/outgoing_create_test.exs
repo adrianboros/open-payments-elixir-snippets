@@ -1,6 +1,7 @@
 defmodule OpenPaymentsSnippets.OutgoingCreateTest do
   use ExUnit.Case, async: false
 
+  import OpenPaymentsSnippets.Test.PaymentMetadata
   import ExUnit.CaptureIO
 
   alias OpenPaymentsSnippets.CLI
@@ -88,7 +89,7 @@ defmodule OpenPaymentsSnippets.OutgoingCreateTest do
                          headers: headers
                        } = post}
 
-      assert Jason.decode!(post.body) == payload
+      assert_enriched(Jason.decode!(post.body), payload)
       assert headers["authorization"] == "GNAP test-outgoing-create-token"
       assert headers["content-type"] == "application/json"
       assert headers["content-length"] == Integer.to_string(byte_size(post.body))
@@ -108,7 +109,7 @@ defmodule OpenPaymentsSnippets.OutgoingCreateTest do
     assert File.stat!(source).mtime == original.mtime
   end
 
-  test "quote and direct payload forms preserve references and metadata without defaults" do
+  test "quote and direct payload forms preserve references and caller metadata with execution details" do
     base = server(@payment, "/tenant%2falpha/")
 
     quote = %{
@@ -123,7 +124,7 @@ defmodule OpenPaymentsSnippets.OutgoingCreateTest do
       refute stdout =~ "\n "
       assert_received {:http_request, %{method: :GET}}
       assert_received {:http_request, %{target: "/tenant%2falpha/outgoing-payments", body: body}}
-      assert Jason.decode!(body) == input
+      assert_enriched(Jason.decode!(body), input)
       refute_receive {:http_request, _}, 20
     end
   end
@@ -256,7 +257,7 @@ defmodule OpenPaymentsSnippets.OutgoingCreateTest do
     assert_received {:http_request, %{method: :POST, headers: headers, body: body}}
     assert headers["authorization"] == "GNAP file-outgoing-create-token"
     assert headers["signature-input"] =~ ~s(keyid="override-id")
-    assert Jason.decode!(body) == payload(base)
+    assert_enriched(Jason.decode!(body), payload(base))
     assert File.read!(token) == "file-outgoing-create-token\r\n"
     assert File.read!(key) == @pem
   end

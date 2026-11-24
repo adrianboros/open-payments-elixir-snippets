@@ -18,7 +18,8 @@
     "$var": "RECEIVER_FINISH_URI"
   },
   "metadata": {
-    "description": "Open Payments via Elixir SDK - self-payment"
+    "description": "Open Payments via Elixir SDK - self-payment",
+    "testScenario": "payment-self"
   },
   "senderAuthorization": {
     "debitAmount": {
